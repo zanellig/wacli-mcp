@@ -20,7 +20,7 @@ from wacli_mcp.settings import Settings
 
 INSTALL_HINT = (
     "Transcription needs the optional faster-whisper dependencies. Reinstall wacli-mcp with the `transcribe` "
-    'extra, for example `uv tool install "wacli-mcp[transcribe]"`, or `wacli-mcp[transcribe-cuda]` for an '
+    'extra, for example `uv tool install --python 3.13 "wacli-mcp[transcribe]"`, or `wacli-mcp[transcribe-cuda]` for an '
     "NVIDIA GPU on Windows, then restart your agent. See the README's Transcription section."
 )
 _REQUIRED_MODULES = ("faster_whisper", "av", "numpy")

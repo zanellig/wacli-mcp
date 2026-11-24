@@ -143,11 +143,13 @@ WhatsApp keeps attachments on its servers for a limited time. For an older file,
 Transcription runs [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on your computer, so audio never leaves it. It is an optional extra, because it adds about 2 GB of libraries and model files:
 
 ```sh
-uv tool install "wacli-mcp[transcribe]"         # CPU, or an NVIDIA GPU with CUDA 12 and cuDNN 9 installed
-uv tool install "wacli-mcp[transcribe-cuda]"    # Windows with an NVIDIA GPU: installs the CUDA libraries too
+uv tool install --python 3.13 "wacli-mcp[transcribe]"        # CPU, or an NVIDIA GPU with CUDA 12 and cuDNN 9 installed
+uv tool install --python 3.13 "wacli-mcp[transcribe-cuda]"   # Windows with an NVIDIA GPU: installs the CUDA libraries too
 ```
 
-With `uvx`, use `uvx --from "wacli-mcp[transcribe]" wacli-mcp` as the server command. Without the extra, `get_media` still returns the files, with a note on how to turn transcription on.
+`--python 3.13` is there because onnxruntime, which faster-whisper needs, publishes wheels only up to Python 3.14. Without it, uv may pick a newer Python and fail to install. With `uvx`, use `uvx --python 3.13 --from "wacli-mcp[transcribe]" wacli-mcp` as the server command. Without the extra, `get_media` still returns the files, with a note on how to turn transcription on.
+
+If `uv tool install` fails with "Access is denied" on Windows, a running agent session is still using wacli-mcp. Close those sessions and run it again.
 
 - The default model is `large-v3-turbo`. The first transcription downloads it, about 1.6 GB, into the Hugging Face cache.
 - On an NVIDIA GPU, a minute of audio takes a few seconds. A CPU takes several times longer. With `WACLI_MCP_TRANSCRIBE_DEVICE=auto`, wacli-mcp tries the GPU and falls back to the CPU if CUDA doesn't work. `whatsapp_status` shows the device in use, and the GPU error if there was one.
