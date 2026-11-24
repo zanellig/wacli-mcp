@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.zanellig/wacli-mcp",
+  "title": "WhatsApp MCP server (wacli)",
+  "description": "Search WhatsApp chats and messages and send replies through your paired wacli account.",
+  "repository": {
+    "url": "https://github.com/zanellig/wacli-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "wacli-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

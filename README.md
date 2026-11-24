@@ -42,7 +42,27 @@ wacli auth --phone "+15551234567"  # or: prints a code to type in "Link with pho
 
 The phone-number option works when your phone can't scan the screen, for example when WhatsApp runs in an Android emulator. Pairing syncs recent history (about three months).
 
-### 2. Install wacli-mcp
+### 2. Install the plugin
+
+With wacli paired and `uvx` on your `PATH`, choose your client. The plugin registers the server and downloads wacli-mcp from PyPI on first use. Installing from GitHub requires access to this repository.
+
+**Claude Code** (v2.1.292 or later)
+
+```sh
+claude plugin install wacli-mcp --marketplace zanellig/wacli-mcp
+```
+
+**Codex CLI**
+
+```sh
+codex plugin marketplace add zanellig/wacli-mcp && codex plugin add wacli-mcp@zanellig-wacli
+```
+
+Start a new session and ask your agent to run `whatsapp_status` to check the connection.
+
+### Manual setup for MCP clients
+
+If you prefer to register the server yourself, install the executable:
 
 ```sh
 uv tool install wacli-mcp
@@ -52,7 +72,7 @@ With pipx, run `pipx install wacli-mcp`. If your shell can't find `wacli-mcp` af
 
 To run on demand, use `uvx wacli-mcp` as your agent's stdio command. For the setup commands below, replace `-- wacli-mcp` with `-- uvx wacli-mcp`.
 
-### 3. Add it to your agent
+Then register the executable with your client.
 
 **Claude Code**, for every project:
 
@@ -188,3 +208,5 @@ The tests run the server in-process against `tests/fake_wacli.py`, so they never
 ## License
 
 [MIT](LICENSE). wacli-mcp is not affiliated with WhatsApp, Meta, or the wacli project.
+
+<!-- mcp-name: io.github.zanellig/wacli-mcp -->
