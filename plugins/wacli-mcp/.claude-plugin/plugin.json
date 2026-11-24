@@ -1,0 +1,15 @@
+{
+  "name": "wacli-mcp",
+  "version": "0.1.0",
+  "description": "Search WhatsApp chats and messages and send replies through your paired wacli account.",
+  "author": {
+    "name": "zanellig"
+  },
+  "repository": "https://github.com/zanellig/wacli-mcp",
+  "license": "MIT",
+  "keywords": [
+    "whatsapp",
+    "mcp",
+    "wacli"
+  ]
+}

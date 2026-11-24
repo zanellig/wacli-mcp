@@ -6,6 +6,12 @@ Please report vulnerabilities privately through GitHub: open the repository's **
 
 Include what an attacker can do, the steps to reproduce it, and the wacli-mcp, wacli, and MCP client versions involved. You should get a reply within a week.
 
+If the report is valid, the fix ships in a new release, and the [changelog](CHANGELOG.md) says what changed. For a vulnerability that puts users at risk, we publish a GitHub security advisory with the release and credit you in it, unless you prefer not to be named. Please give us a reasonable time to fix the problem before you disclose it.
+
+## Supported versions
+
+wacli-mcp is below 1.0, and only the latest release gets security fixes. Check which version you run with `uv tool list` or `pipx list`, and upgrade with `uv tool upgrade wacli-mcp` or `pipx upgrade wacli-mcp`.
+
 ## Scope
 
 In scope:
