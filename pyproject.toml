@@ -31,6 +31,9 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/zanellig/wacli-mcp"
 Issues = "https://github.com/zanellig/wacli-mcp/issues"
+Changelog = "https://github.com/zanellig/wacli-mcp/blob/main/CHANGELOG.md"
+"Release notes" = "https://github.com/zanellig/wacli-mcp/releases"
+"Security policy" = "https://github.com/zanellig/wacli-mcp/security/policy"
 
 [project.scripts]
 wacli-mcp = "wacli_mcp:main"

@@ -1,6 +1,13 @@
 # wacli-mcp
 
+[![CI](https://github.com/zanellig/wacli-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zanellig/wacli-mcp/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/wacli-mcp)](https://pypi.org/project/wacli-mcp/)
+[![Python versions](https://img.shields.io/pypi/pyversions/wacli-mcp)](https://pypi.org/project/wacli-mcp/)
+[![License: MIT](https://img.shields.io/github/license/zanellig/wacli-mcp)](https://github.com/zanellig/wacli-mcp/blob/main/LICENSE)
+
 An MCP server that lets AI agents such as Claude Code and Codex read your WhatsApp and send messages for you. It wraps [wacli](https://github.com/openclaw/wacli), an open-source WhatsApp client that links to your account as a device, the way WhatsApp Web does.
+
+This is alpha software. Read the [changelog](https://github.com/zanellig/wacli-mcp/blob/main/CHANGELOG.md), the [release notes](https://github.com/zanellig/wacli-mcp/releases), and the [security policy](https://github.com/zanellig/wacli-mcp/security/policy) before you install it.
 
 Ask your agent things like:
 
@@ -26,7 +33,7 @@ Claude Code / Codex  --stdio-->  wacli-mcp  --runs-->  wacli  --linked device-->
 ## Requirements
 
 - [wacli](https://github.com/openclaw/wacli) 0.26 or later, paired with your account.
-- [uv](https://docs.astral.sh/uv/) (it installs Python 3.11+ for you).
+- [uv](https://docs.astral.sh/uv/) (it can install Python for you), or [pipx](https://pipx.pypa.io/) with Python 3.11 or later.
 - Any MCP client. The optional server-side send confirmation needs a client that shows MCP elicitations, such as the Claude Code terminal app or the Codex CLI.
 
 ## Setup
@@ -42,15 +49,37 @@ wacli auth --phone "+15551234567"  # or: prints a code to type in "Link with pho
 
 The phone-number option works when your phone can't scan the screen, for example when WhatsApp runs in an Android emulator. Pairing syncs recent history (about three months).
 
-### 2. Install wacli-mcp
+### 2. Install the plugin
+
+With wacli paired and `uvx` on your `PATH`, choose your client. The plugin registers the server and downloads wacli-mcp from PyPI on first use. Installing from GitHub requires access to this repository.
+
+**Claude Code** (v2.1.292 or later)
 
 ```sh
-uv tool install git+https://github.com/zanellig/wacli-mcp
+claude plugin install wacli-mcp --marketplace zanellig/wacli-mcp
 ```
 
-From a local clone, use `uv tool install .` instead. Either way, `wacli-mcp` ends up on your `PATH`.
+**Codex CLI**
 
-### 3. Add it to your agent
+```sh
+codex plugin marketplace add zanellig/wacli-mcp && codex plugin add wacli-mcp@zanellig-wacli
+```
+
+Start a new session and ask your agent to run `whatsapp_status` to check the connection.
+
+### Manual setup for MCP clients
+
+If you prefer to register the server yourself, install the executable:
+
+```sh
+uv tool install wacli-mcp
+```
+
+With pipx, run `pipx install wacli-mcp`. If your shell can't find `wacli-mcp` after installation, run `uv tool update-shell` or `pipx ensurepath` for the installer you used, then restart your shell.
+
+To run on demand, use `uvx wacli-mcp` as your agent's stdio command. For the setup commands below, replace `-- wacli-mcp` with `-- uvx wacli-mcp`.
+
+Then register the executable with your client.
 
 **Claude Code**, for every project:
 
@@ -169,7 +198,7 @@ What it does not protect against:
 - Anything the agent reads goes to the model provider that runs the agent.
 - The store's `session.db` holds your linked-device keys. Anyone who copies it can act as that device. To revoke it, open WhatsApp on your phone, go to **Settings > Linked devices**, and log the device out.
 
-See [SECURITY.md](SECURITY.md) to report a vulnerability.
+See the [security policy](https://github.com/zanellig/wacli-mcp/security/policy) to report a vulnerability. Fixes are listed in the [changelog](https://github.com/zanellig/wacli-mcp/blob/main/CHANGELOG.md).
 
 ## Development
 
@@ -186,3 +215,5 @@ The tests run the server in-process against `tests/fake_wacli.py`, so they never
 ## License
 
 [MIT](LICENSE). wacli-mcp is not affiliated with WhatsApp, Meta, or the wacli project.
+
+<!-- mcp-name: io.github.zanellig/wacli-mcp -->
