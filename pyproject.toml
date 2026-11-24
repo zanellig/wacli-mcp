@@ -1,0 +1,64 @@
+[project]
+name = "wacli-mcp"
+version = "0.1.0"
+description = "MCP server that lets AI agents read your WhatsApp and send replies you confirm, through the wacli CLI."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "zanellig", email = "104658951+zanellig@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+keywords = ["mcp", "whatsapp", "wacli", "claude-code", "codex", "model-context-protocol"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    "anyio>=4.5",
+    "mcp>=2.3,<3",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.6",
+]
+
+[project.urls]
+Repository = "https://github.com/zanellig/wacli-mcp"
+Issues = "https://github.com/zanellig/wacli-mcp/issues"
+
+[project.scripts]
+wacli-mcp = "wacli_mcp:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.40.2",
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["I", "B", "UP", "SIM", "RUF", "BLE"]
+
+[tool.basedpyright]
+pythonVersion = "3.11"
+include = ["src", "tests"]
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
