@@ -20,6 +20,7 @@ In scope:
 - A confirmation prompt that shows something different from what is sent, for example through hidden characters or a crafted chat name.
 - A `send_text` call that reaches a recipient other than the `to` it was given, apart from WhatsApp's own identifier routing noted below.
 - Argument injection into the wacli command line.
+- `get_media` writing a file outside its media folder, or returning a file from another chat or message than the one requested.
 - Read tools that send messages, mark messages read, or change account or chat state. The pre-read sync updates the local copy and can send delivery receipts, as any linked device does; with `WACLI_MCP_READ_ONLY=true` it does not run at all.
 
 Out of scope, because the server can't control them:
@@ -28,5 +29,6 @@ Out of scope, because the server can't control them:
 - An MCP client that answers the `server` confirmation without showing it to a person.
 - WhatsApp returning a different identifier for the same account when wacli sends to a phone-number JID.
 - An agent with shell access running wacli directly or reading the wacli store.
-- A model following instructions inside a message it read. The server labels message content as untrusted, but the model decides what to do with it.
+- A model following instructions inside a message, photo, document or voice note it read. The server labels this content as untrusted, but the model decides what to do with it.
+- Wrong words in a transcript. Transcription is machine output.
 - Bugs in wacli, whatsmeow, or the MCP client. Please report those to their projects.
