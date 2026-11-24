@@ -26,7 +26,7 @@ Claude Code / Codex  --stdio-->  wacli-mcp  --runs-->  wacli  --linked device-->
 ## Requirements
 
 - [wacli](https://github.com/openclaw/wacli) 0.26 or later, paired with your account.
-- [uv](https://docs.astral.sh/uv/) (it installs Python 3.11+ for you).
+- [uv](https://docs.astral.sh/uv/) (it can install Python for you), or [pipx](https://pipx.pypa.io/) with Python 3.11 or later.
 - Any MCP client. The optional server-side send confirmation needs a client that shows MCP elicitations, such as the Claude Code terminal app or the Codex CLI.
 
 ## Setup
@@ -45,10 +45,12 @@ The phone-number option works when your phone can't scan the screen, for example
 ### 2. Install wacli-mcp
 
 ```sh
-uv tool install git+https://github.com/zanellig/wacli-mcp
+uv tool install wacli-mcp
 ```
 
-From a local clone, use `uv tool install .` instead. Either way, `wacli-mcp` ends up on your `PATH`.
+With pipx, run `pipx install wacli-mcp`. If your shell can't find `wacli-mcp` after installation, run `uv tool update-shell` or `pipx ensurepath` for the installer you used, then restart your shell.
+
+To run on demand, use `uvx wacli-mcp` as your agent's stdio command. For the setup commands below, replace `-- wacli-mcp` with `-- uvx wacli-mcp`.
 
 ### 3. Add it to your agent
 
