@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,13 +27,17 @@ class Settings(BaseSettings):
     )
     read_only: bool = Field(
         default=False,
-        description="Hide the send tool. Reads still work.",
-    )
-    confirm_sends: bool = Field(
-        default=True,
         description=(
-            "Ask the user to confirm every send through an MCP elicitation. "
-            "If the client cannot show one, the send is refused."
+            "Hide the send tool and skip the pre-read sync, so no tool connects to WhatsApp "
+            "or writes the local store. Run `wacli sync --follow` separately to keep reads current."
+        ),
+    )
+    send_confirmation: Literal["client", "server"] = Field(
+        default="client",
+        description=(
+            "Who confirms a send. `client`: the agent and its client's tool approval, like any other "
+            "tool. `server`: wacli-mcp asks you itself through an MCP elicitation and refuses to send "
+            "when the client can't show it."
         ),
     )
     link_previews: bool = Field(
