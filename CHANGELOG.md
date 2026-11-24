@@ -6,6 +6,16 @@ Every release has a page with these notes on the [releases page](https://github.
 
 ## [Unreleased]
 
+### Added
+
+- `get_media` downloads the attachments of up to 20 messages (photos, voice notes, videos, stickers and documents) and returns their local paths. It also returns JPEG and PNG photos up to 1 MB inline, so the model sees them directly. Files are saved in a cache folder, named by message id with an extension that matches their type, and reused on later calls.
+- Local transcription with [faster-whisper](https://github.com/SYSTRAN/faster-whisper): `get_media` with `transcribe: true` returns the text of voice notes, audio and video, and `list_messages` with `transcribe_audio: true` adds transcripts to the newest 20 voice notes it returns. Audio stays on your computer. Install the `transcribe` extra, or `transcribe-cuda` for an NVIDIA GPU on Windows. Without it, both tools still work and say how to enable transcription.
+- Settings for the media folder, inline photo size, and the transcription model, device and language. `whatsapp_status` reports the media folder and whether transcription is available.
+
+### Changed
+
+- Results now label attachments and transcripts as untrusted, like message text.
+
 ## [0.1.0] - 2026-11-24
 
 First release. It is alpha software: it works with real accounts, and its interface can still change before 1.0. It needs [wacli](https://github.com/openclaw/wacli) 0.26 or later and Python 3.11 or later.

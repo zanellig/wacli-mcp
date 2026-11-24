@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import json
-import sys
-from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 import anyio
 import pytest
 from mcp.client import Client
 from mcp.client.session import ClientRequestContext, ElicitationFnT
-from mcp.server.mcpserver import MCPServer
 from mcp.types import (
     CallToolResult,
     ElicitRequestParams,
@@ -18,51 +14,11 @@ from mcp.types import (
     ErrorData,
     InputRequiredResult,
     InputResponses,
-    TextContent,
 )
 
-from wacli_mcp.settings import Settings
-from wacli_mcp.wacli import Wacli
+from support import JID, Calls, make_server, text_of
 
 pytestmark = pytest.mark.anyio
-
-FAKE_WACLI = Path(__file__).with_name("fake_wacli.py")
-JID = "15551234567@s.whatsapp.net"
-Calls = Callable[[], list[list[str]]]
-
-
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
-
-
-@pytest.fixture
-def calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Calls:
-    log = tmp_path / "calls.jsonl"
-    monkeypatch.setenv("FAKE_WACLI_LOG", str(log))
-
-    def read() -> list[list[str]]:
-        if not log.exists():
-            return []
-        return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-
-    return read
-
-
-def make_server(*, max_stdout_bytes: int | None = None, **overrides: Any) -> MCPServer:
-    from wacli_mcp.server import build_server
-
-    settings = Settings(**overrides)
-    wacli = Wacli(settings, command=(sys.executable, str(FAKE_WACLI)))
-    if max_stdout_bytes is not None:
-        wacli.max_stdout_bytes = max_stdout_bytes
-    return build_server(settings, wacli)
-
-
-def text_of(result: CallToolResult) -> str:
-    block = result.content[0]
-    assert isinstance(block, TextContent)
-    return block.text
 
 
 def answering(content: dict[str, Any], seen: list[str] | None = None) -> ElicitationFnT:
@@ -105,6 +61,7 @@ async def test_tools_and_annotations() -> None:
         "search_messages",
         "get_message_context",
         "search_contacts",
+        "get_media",
         "send_text",
     }
     send = tools["send_text"]
@@ -172,6 +129,7 @@ async def test_read_only_mode_never_writes_or_syncs(calls: Calls) -> None:
             ("search_messages", {"query": "report"}),
             ("get_message_context", {"chat": JID, "message_id": "MSG1"}),
             ("search_contacts", {"query": "Ada"}),
+            ("get_media", {"chat": JID, "message_ids": ["PHOTO1"]}),
         ]:
             assert not (await client.call_tool(tool, args)).is_error, tool
     assert "send_text" not in names
