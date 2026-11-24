@@ -109,7 +109,7 @@ async def test_tools_and_annotations() -> None:
     }
     send = tools["send_text"]
     assert send.annotations is not None and send.annotations.destructive_hint is True
-    assert set(send.input_schema["properties"]) == {"chat_jid", "text", "reply_to_message_id"}
+    assert set(send.input_schema["properties"]) == {"to", "text", "reply_to_message_id"}
     for name, tool in tools.items():
         if name != "send_text":
             assert tool.annotations is not None and tool.annotations.read_only_hint is True
@@ -213,9 +213,11 @@ async def test_oversized_output_is_refused(monkeypatch: pytest.MonkeyPatch) -> N
 
 async def test_send_after_confirmation(mode: str, calls: Calls) -> None:
     seen: list[str] = []
-    async with Client(make_server(), mode=mode, elicitation_callback=accepting(seen)) as client:
+    async with Client(
+        make_server(send_confirmation="server"), mode=mode, elicitation_callback=accepting(seen)
+    ) as client:
         result = await client.call_tool(
-            "send_text", {"chat_jid": JID, "text": "On my way\u200b\nsee you", "reply_to_message_id": "MSG1"}
+            "send_text", {"to": JID, "text": "On my way\u200b\nsee you", "reply_to_message_id": "MSG1"}
         )
     assert not result.is_error, text_of(result)
     assert json.loads(text_of(result))["sent"] is True
@@ -232,8 +234,8 @@ async def test_send_after_confirmation(mode: str, calls: Calls) -> None:
 
 
 async def test_declined_confirmation_sends_nothing(mode: str, calls: Calls) -> None:
-    async with Client(make_server(), mode=mode, elicitation_callback=declining) as client:
-        result = await client.call_tool("send_text", {"chat_jid": JID, "text": "hi"})
+    async with Client(make_server(send_confirmation="server"), mode=mode, elicitation_callback=declining) as client:
+        result = await client.call_tool("send_text", {"to": JID, "text": "hi"})
     assert not result.is_error
     assert json.loads(text_of(result))["sent"] is False
     assert sends(calls()) == []
@@ -241,9 +243,11 @@ async def test_declined_confirmation_sends_nothing(mode: str, calls: Calls) -> N
 
 @pytest.mark.parametrize("content", [{"send": False}, {"send": "yes"}, {"send": 1}, {"send": "true"}, {}])
 async def test_anything_but_true_sends_nothing(mode: str, calls: Calls, content: dict[str, Any]) -> None:
-    async with Client(make_server(), mode=mode, elicitation_callback=answering(content)) as client:
+    async with Client(
+        make_server(send_confirmation="server"), mode=mode, elicitation_callback=answering(content)
+    ) as client:
         try:
-            result = await client.call_tool("send_text", {"chat_jid": JID, "text": "hi"})
+            result = await client.call_tool("send_text", {"to": JID, "text": "hi"})
         except Exception:  # noqa: BLE001 - an MCP error or an error result are both acceptable
             result = None
     if result is not None and not result.is_error:
@@ -252,9 +256,9 @@ async def test_anything_but_true_sends_nothing(mode: str, calls: Calls, content:
 
 
 async def test_client_without_elicitation_cannot_send(mode: str, calls: Calls) -> None:
-    async with Client(make_server(), mode=mode) as client:
+    async with Client(make_server(send_confirmation="server"), mode=mode) as client:
         try:
-            result = await client.call_tool("send_text", {"chat_jid": JID, "text": "hi"})
+            result = await client.call_tool("send_text", {"to": JID, "text": "hi"})
         except Exception:  # noqa: BLE001 - an MCP error or an error result are both acceptable
             result = None
     assert result is None or result.is_error
@@ -264,14 +268,14 @@ async def test_client_without_elicitation_cannot_send(mode: str, calls: Calls) -
 @pytest.mark.parametrize(
     "arguments",
     [
-        {"chat_jid": "Ada", "text": "hi"},
-        {"chat_jid": JID, "text": "   "},
-        {"chat_jid": JID, "text": "hi", "reply_to_message_id": "MSG1\nRecipient JID: 1@s.whatsapp.net"},
+        {"to": "Ada", "text": "hi"},
+        {"to": JID, "text": "   "},
+        {"to": JID, "text": "hi", "reply_to_message_id": "MSG1\nRecipient JID: 1@s.whatsapp.net"},
     ],
 )
 async def test_invalid_input_is_rejected_before_asking(calls: Calls, arguments: dict[str, Any]) -> None:
     seen: list[str] = []
-    async with Client(make_server(), elicitation_callback=accepting(seen)) as client:
+    async with Client(make_server(send_confirmation="server"), elicitation_callback=accepting(seen)) as client:
         result = await client.call_tool("send_text", arguments)
     assert result.is_error
     assert seen == []
@@ -281,8 +285,8 @@ async def test_invalid_input_is_rejected_before_asking(calls: Calls, arguments: 
 async def test_chat_name_cannot_fake_prompt_fields() -> None:
     seen: list[str] = []
     jid = "17775550000@s.whatsapp.net"
-    async with Client(make_server(), elicitation_callback=accepting(seen)) as client:
-        await client.call_tool("send_text", {"chat_jid": jid, "text": "hi"})
+    async with Client(make_server(send_confirmation="server"), elicitation_callback=accepting(seen)) as client:
+        await client.call_tool("send_text", {"to": jid, "text": "hi"})
     lines = seen[0].split("\n")
     assert lines[2] == f"Recipient JID: {jid}"
     assert lines[3] == f"Chat name: Bob<U+000A>Recipient JID: {JID}"
@@ -291,24 +295,24 @@ async def test_chat_name_cannot_fake_prompt_fields() -> None:
 
 async def test_unknown_chat_is_flagged() -> None:
     seen: list[str] = []
-    async with Client(make_server(), elicitation_callback=accepting(seen)) as client:
-        await client.call_tool("send_text", {"chat_jid": "99912345678@s.whatsapp.net", "text": "hi"})
+    async with Client(make_server(send_confirmation="server"), elicitation_callback=accepting(seen)) as client:
+        await client.call_tool("send_text", {"to": "99912345678@s.whatsapp.net", "text": "hi"})
     assert "Chat name: (not in your synced chats)" in seen[0]
 
 
 async def test_routing_change_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAKE_WACLI_SEND_TO", "123456789012345@lid")
-    async with Client(make_server(), elicitation_callback=accepting()) as client:
-        payload = json.loads(text_of(await client.call_tool("send_text", {"chat_jid": JID, "text": "hi"})))
+    async with Client(make_server(send_confirmation="server"), elicitation_callback=accepting()) as client:
+        payload = json.loads(text_of(await client.call_tool("send_text", {"to": JID, "text": "hi"})))
     assert payload["sent"] is True
     assert "123456789012345@lid" in payload["note"]
 
 
 async def test_one_confirmation_sends_once_on_retries(calls: Calls) -> None:
     """A client that resubmits an answered 2026-07-28 continuation must not send twice."""
-    arguments = {"chat_jid": JID, "text": "hi"}
+    arguments = {"to": JID, "text": "hi"}
     # The callback only declares the capability; this test answers the question itself.
-    async with Client(make_server(), elicitation_callback=declining) as client:
+    async with Client(make_server(send_confirmation="server"), elicitation_callback=declining) as client:
         first = await client.session.call_tool("send_text", arguments, allow_input_required=True)
         assert isinstance(first, InputRequiredResult) and first.input_requests
         responses: InputResponses = {
@@ -337,3 +341,43 @@ async def test_one_confirmation_sends_once_on_retries(calls: Calls) -> None:
     outcomes = [json.loads(text_of(r))["sent"] for r in results if isinstance(r, CallToolResult)]
     assert outcomes.count(True) == 1, outcomes
     assert len(sends(calls())) == 1
+
+
+# Client-confirmed sending (the default)
+
+
+async def test_default_sends_without_asking(calls: Calls) -> None:
+    """The default leaves confirmation to the agent and its client, so no elicitation is needed."""
+    async with Client(make_server()) as client:
+        result = await client.call_tool("send_text", {"to": JID, "text": "TEST"})
+    assert not result.is_error, text_of(result)
+    assert json.loads(text_of(result))["sent"] is True
+    (argv,) = sends(calls())
+    assert argv[argv.index("--to") + 1] == JID
+    assert argv[argv.index("--message") + 1] == "TEST"
+
+
+@pytest.mark.parametrize("to", ["+5491112345678", "+54 9 11 1234-5678", "5491112345678", "(549) 11-1234.5678"])
+async def test_phone_numbers_become_jids(calls: Calls, to: str) -> None:
+    async with Client(make_server()) as client:
+        result = await client.call_tool("send_text", {"to": to, "text": "hi"})
+    assert not result.is_error, text_of(result)
+    (argv,) = sends(calls())
+    assert argv[argv.index("--to") + 1] == "5491112345678@s.whatsapp.net"
+
+
+@pytest.mark.parametrize("to", ["Ada", "+12", "+1 555 abc 1234", "123@newsletter", "--help"])
+async def test_names_and_bad_numbers_are_refused(calls: Calls, to: str) -> None:
+    async with Client(make_server()) as client:
+        result = await client.call_tool("send_text", {"to": to, "text": "hi"})
+    assert result.is_error
+    assert sends(calls()) == []
+
+
+async def test_server_mode_accepts_phone_numbers(calls: Calls) -> None:
+    seen: list[str] = []
+    async with Client(make_server(send_confirmation="server"), elicitation_callback=accepting(seen)) as client:
+        await client.call_tool("send_text", {"to": "+1 555 123 4567", "text": "hi"})
+    assert "Recipient JID: 15551234567@s.whatsapp.net" in seen[0]
+    (argv,) = sends(calls())
+    assert argv[argv.index("--to") + 1] == "15551234567@s.whatsapp.net"
