@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import sys
@@ -11,12 +12,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import anyio
+from anyio.abc import ByteReceiveStream, Process
 
 from wacli_mcp.settings import Settings
 
-_STDERR_TAIL_CHARS = 2_000
+_STDERR_TAIL_BYTES = 4_000
+_DEFAULT_MAX_STDOUT_BYTES = 32 * 1024 * 1024
 # Keeps wacli from opening a console window per call when the server runs under a GUI client.
 _CREATION_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+# wacli's lock error reads "store is locked (another wacli is running?): store locked: ...".
+_LOCKED_MARKERS = ("store is locked", "store locked")
 
 
 class WacliError(Exception):
@@ -29,7 +34,17 @@ class SyncState:
 
     attempted_at: float | None = None
     ok: bool = False
+    locked_by_other: bool = False
     error: str | None = None
+
+
+def inner_timeout(outer: float) -> float:
+    """The `--timeout` passed to wacli: shorter than ours, so wacli gives up first and reports why.
+
+    For sends delegated to `wacli sync --follow`, this also bounds how long the send may wait
+    in the daemon's queue, so it cannot go out after this server has reported a timeout.
+    """
+    return max(1.0, outer - min(10.0, outer * 0.2))
 
 
 @dataclass
@@ -42,6 +57,7 @@ class Wacli:
 
     settings: Settings
     command: Sequence[str] = ()
+    max_stdout_bytes: int = _DEFAULT_MAX_STDOUT_BYTES
     sync_state: SyncState = field(default_factory=SyncState)
     # Serializes commands that take wacli's store lock (sync and send), so this
     # server never races itself for the lock.
@@ -51,10 +67,12 @@ class Wacli:
         if not self.command:
             self.command = (self.settings.wacli_path,)
 
-    def _global_args(self, *, read_only: bool) -> list[str]:
+    def _global_args(self, *, read_only: bool, timeout: float | None) -> list[str]:
         args = ["--json"]
         if read_only:
             args.append("--read-only")
+        if timeout is not None:
+            args += ["--timeout", f"{timeout:.0f}s"]
         if self.settings.account:
             args += ["--account", self.settings.account]
         if self.settings.store:
@@ -67,40 +85,75 @@ class Wacli:
         *,
         read_only: bool = True,
         timeout: float | None = None,
+        pass_timeout: bool = True,
     ) -> Any:
         """Run `wacli <global flags> <args>` and return the envelope's `data`.
 
         Raises:
-            WacliError: on a timeout, a non-JSON response, or `success: false`.
+            WacliError: on a timeout, oversized or non-JSON output, or `success: false`.
         """
-        argv = [*self.command, *self._global_args(read_only=read_only), *args]
         limit = timeout if timeout is not None else self.settings.command_timeout_seconds
+        global_args = self._global_args(read_only=read_only, timeout=inner_timeout(limit) if pass_timeout else None)
+        argv = [*self.command, *global_args, *args]
+        returncode, stdout_bytes, stderr_bytes = await self._execute(argv, limit)
+
+        stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
+        stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
+        try:
+            envelope = json.loads(stdout)
+        except json.JSONDecodeError:
+            detail = stderr or stdout[-_STDERR_TAIL_BYTES:] or "no output"
+            raise WacliError(f"wacli exited with code {returncode}: {detail}") from None
+        if not isinstance(envelope, dict) or "success" not in envelope:
+            raise WacliError("wacli returned JSON without the expected success/data/error envelope")
+        if not envelope["success"]:
+            raise WacliError(str(envelope.get("error") or f"wacli exited with code {returncode}"))
+        return envelope.get("data")
+
+    async def _execute(self, argv: list[str], limit: float) -> tuple[int | None, bytes, bytes]:
+        """Run argv, keeping at most `max_stdout_bytes` of stdout and the tail of stderr."""
+        stdout = bytearray()
+        stderr_tail = bytearray()
+        overflow = False
+
+        async def read_stdout(process: Process, stream: ByteReceiveStream) -> None:
+            nonlocal overflow
+            async for chunk in stream:
+                if len(stdout) + len(chunk) > self.max_stdout_bytes:
+                    overflow = True
+                    with contextlib.suppress(ProcessLookupError):  # it may have exited already
+                        process.kill()
+                    return
+                stdout.extend(chunk)
+
+        async def read_stderr(stream: ByteReceiveStream) -> None:
+            async for chunk in stream:
+                stderr_tail.extend(chunk)
+                del stderr_tail[:-_STDERR_TAIL_BYTES]
+
         try:
             with anyio.fail_after(limit):
-                result = await anyio.run_process(
+                # On timeout or cancellation, leaving this block kills and reaps the process.
+                async with await anyio.open_process(
                     argv,
-                    check=False,
                     # The MCP server speaks JSON-RPC on stdin; wacli must never read it.
                     stdin=subprocess.DEVNULL,
                     creationflags=_CREATION_FLAGS,
-                )
+                ) as process:
+                    assert process.stdout is not None and process.stderr is not None
+                    async with anyio.create_task_group() as tg:
+                        tg.start_soon(read_stdout, process, process.stdout)
+                        tg.start_soon(read_stderr, process.stderr)
+                    returncode = await process.wait()
         except TimeoutError as exc:
             raise WacliError(f"wacli timed out after {limit:g}s") from exc
         except OSError as exc:
             raise WacliError(f"could not start wacli ({self.command[0]!r}): {exc}") from exc
-
-        stdout = result.stdout.decode("utf-8", errors="replace").strip()
-        stderr = result.stderr.decode("utf-8", errors="replace").strip()
-        try:
-            envelope = json.loads(stdout)
-        except json.JSONDecodeError:
-            detail = stderr[-_STDERR_TAIL_CHARS:] or stdout[-_STDERR_TAIL_CHARS:] or "no output"
-            raise WacliError(f"wacli exited with code {result.returncode}: {detail}") from None
-        if not isinstance(envelope, dict) or "success" not in envelope:
-            raise WacliError("wacli returned JSON without the expected success/data/error envelope")
-        if not envelope["success"]:
-            raise WacliError(str(envelope.get("error") or f"wacli exited with code {result.returncode}"))
-        return envelope.get("data")
+        if overflow:
+            raise WacliError(
+                f"wacli printed more than {self.max_stdout_bytes} bytes; narrow the query or lower `limit`"
+            )
+        return returncode, bytes(stdout), bytes(stderr_tail)
 
     async def run_write(self, args: Sequence[str], *, timeout: float | None = None) -> Any:
         """Run a command that may change WhatsApp or the local store."""
@@ -110,15 +163,15 @@ class Wacli:
     async def refresh(self) -> SyncState:
         """Pull new messages with a short one-shot sync, at most once per `sync_max_age_seconds`.
 
-        Failures are recorded, not raised: when `wacli sync --follow` owns the store,
-        the one-shot sync cannot take the lock, and the store is already current.
+        Failures are recorded, not raised. When another wacli process owns the store
+        (usually `wacli sync --follow`), the one-shot sync cannot run; that process keeps
+        the store current instead.
         """
         settings = self.settings
         state = self.sync_state
-        if not settings.sync_before_read:
+        if settings.read_only or not settings.sync_before_read:
             return state
-        now = time.monotonic()
-        if state.attempted_at is not None and now - state.attempted_at < settings.sync_max_age_seconds:
+        if state.attempted_at is not None and time.monotonic() - state.attempted_at < settings.sync_max_age_seconds:
             return state
         async with self._write_lock:
             # Another caller may have synced while this one waited for the lock.
@@ -136,10 +189,15 @@ class Wacli:
                     ],
                     read_only=False,
                     timeout=settings.sync_timeout_seconds,
+                    # `--timeout` does not apply to sync; --idle-exit and our deadline bound it.
+                    pass_timeout=False,
                 )
             except WacliError as exc:
-                state.ok, state.error = False, str(exc)
+                message = str(exc)
+                state.ok = False
+                state.locked_by_other = any(marker in message.lower() for marker in _LOCKED_MARKERS)
+                state.error = None if state.locked_by_other else message
             else:
-                state.ok, state.error = True, None
+                state.ok, state.locked_by_other, state.error = True, False, None
             state.attempted_at = time.monotonic()
         return state

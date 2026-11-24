@@ -19,9 +19,9 @@ Claude Code / Codex  --stdio-->  wacli-mcp  --runs-->  wacli  --linked device-->
                                     +--> confirmation prompt shown to you before each send
 ```
 
-- wacli keeps a local SQLite copy of your messages in `~/.wacli`. Reads come from that copy.
-- Before a read, wacli-mcp runs a short `wacli sync --once` to pick up new messages, at most once a minute. If you run `wacli sync --follow` yourself, the store is always current and this step is skipped.
-- `send_text` asks you to confirm the recipient and the exact text through an [MCP elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation) before it calls `wacli send`. If you decline, don't answer, or the client can't show the prompt, nothing is sent.
+- wacli keeps a local SQLite copy of your messages (in `~/.wacli` on Windows and macOS, `~/.local/state/wacli` on Linux; `wacli doctor` shows the active one). Reads come from that copy.
+- Before a read, wacli-mcp runs a short `wacli sync --once` to pick up new messages, at most once a minute. The sync connects as your linked device and updates the local copy, like any linked device coming online: it can send delivery receipts (two grey ticks), never read receipts. If you run `wacli sync --follow` yourself, that process keeps the copy current and the per-read sync is skipped.
+- `send_text` asks you to confirm the recipient and the exact text through an [MCP elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation) before it calls `wacli send`. If you decline, don't answer, or the client can't show the prompt, nothing is sent. There is no setting to turn this off.
 - The server talks to the agent over stdio only. It opens no network port.
 
 ## Requirements
@@ -98,9 +98,26 @@ All tools except `send_text` call wacli with `--read-only`. Results label messag
 
 ## Confirmation behavior
 
-The confirmation shows the chat name and JID, the reply target, the length, and the full text. Invisible characters such as zero-width spaces and text-direction overrides are shown as `<U+XXXX>` so that hidden content can't slip past you.
+The confirmation looks like this:
 
-What happens when the client can't ask you, checked against the clients' source code and with headless test runs:
+```
+Send this WhatsApp message?
+
+Recipient JID: 15551234567@s.whatsapp.net
+Chat name: Ada
+Reply to message ID: 3EB0C5A1F2
+Text: 31 characters on 2 line(s). Each line below starts with "| ".
+| Running 10 minutes late.
+| Sorry!
+```
+
+- The recipient JID always comes first, on its own line. The chat name comes from your local store and other people can influence it, so it is shown on one line with any line breaks marked.
+- Each line of the message starts with `| `, so message text can't imitate the fields above it.
+- Invisible characters, such as zero-width spaces, text-direction overrides, and line separators, appear as `<U+XXXX>`. A literal `<U+` in the text appears as `<U+003C>U+`, so every marker you see stands for a real hidden character.
+- Only an explicit `true` in the form counts as yes.
+- One confirmation sends one message. If the client resubmits an answered confirmation, for example after losing the result, nothing is sent again.
+
+The prompt reaches you through your MCP client, so the guarantee holds only as far as you trust that client to show it to you and report your answer. wacli-mcp can't tell a person's answer from a client that answers on its own. What happens with the clients checked so far, from their source code and from headless test runs:
 
 | Client and mode | Result |
 | --- | --- |
@@ -110,7 +127,7 @@ What happens when the client can't ask you, checked against the clients' source 
 | Codex with `--dangerously-bypass-approvals-and-sandbox`, or `codex exec` | Not sent. |
 | A client without elicitation support | Not sent; the tool returns an error. |
 
-To rely on your client's own tool approval instead, set `WACLI_MCP_CONFIRM_SENDS=false`. Then any mode that skips the client's approval also sends without asking.
+For a phone-number JID, wacli asks WhatsApp for the account's current identifier just before sending, and WhatsApp can return the same account's other identifier (a `@lid` JID). When that happens, the result says where the message went.
 
 ## Configuration
 
@@ -121,14 +138,13 @@ All settings are environment variables.
 | `WACLI_MCP_WACLI_PATH` | `wacli` | Path to the wacli executable. |
 | `WACLI_MCP_ACCOUNT` | unset | wacli named account (`--account`). |
 | `WACLI_MCP_STORE` | unset | wacli store directory (`--store`). |
-| `WACLI_MCP_READ_ONLY` | `false` | Hide `send_text`. |
-| `WACLI_MCP_CONFIRM_SENDS` | `true` | Ask before every send. See above before turning it off. |
+| `WACLI_MCP_READ_ONLY` | `false` | Hide `send_text` and skip the per-read sync, so no tool connects to WhatsApp or writes the local copy. Run `wacli sync --follow` separately to keep reads current. |
 | `WACLI_MCP_LINK_PREVIEWS` | `false` | Let wacli fetch link previews for URLs in sent messages. |
 | `WACLI_MCP_SYNC_BEFORE_READ` | `true` | Run `wacli sync --once` before reads when the store may be stale. |
 | `WACLI_MCP_SYNC_MAX_AGE_SECONDS` | `60` | Minimum time between those syncs. |
 | `WACLI_MCP_SYNC_IDLE_EXIT_SECONDS` | `4` | How long a sync waits for new events before it stops. |
 | `WACLI_MCP_SYNC_TIMEOUT_SECONDS` | `45` | Upper bound for one sync. |
-| `WACLI_MCP_COMMAND_TIMEOUT_SECONDS` | `60` | Upper bound for any other wacli command. |
+| `WACLI_MCP_COMMAND_TIMEOUT_SECONDS` | `60` | Upper bound for any other wacli command. wacli gets a slightly shorter `--timeout`, so a send queued behind `wacli sync --follow` can't go out after wacli-mcp has reported a timeout. |
 | `WACLI_MCP_MAX_OUTPUT_CHARS` | `60000` | Truncate longer tool results. |
 
 ## Security
@@ -137,16 +153,17 @@ An agent with this server has your private messages, reads text that anyone can 
 
 What wacli-mcp does about it:
 
-- Sends need your confirmation through the server, so a client in an auto-approve mode can't skip it.
-- The confirmation shows the real recipient and the full text, with hidden characters made visible.
-- Reads run with wacli's `--read-only` flag, and results label message content as untrusted.
+- Every send needs a confirmation that the server requests itself, so an agent or a client permission mode can't skip it by approving the tool call.
+- The confirmation shows the real recipient and the full text, with hidden characters made visible, and each confirmation sends at most one message.
+- Read tools run wacli with `--read-only`, and results label message content as untrusted.
 - No network listener, and link previews are off by default.
 
 What it does not protect against:
 
-- An agent that can run arbitrary shell commands can run `wacli send` directly, or read `~/.wacli`, without going through this server. Keep your agent's shell approvals on in sessions that use WhatsApp.
+- A client that answers the confirmation without asking you. The server trusts the MCP client to show the prompt to a person.
+- An agent that can run arbitrary shell commands can run `wacli send` directly, or read the wacli store, without going through this server. Keep your agent's shell approvals on in sessions that use WhatsApp.
 - Anything the agent reads goes to the model provider that runs the agent.
-- `~/.wacli/session.db` holds your linked-device keys. Anyone who copies it can act as that device. To revoke it, open WhatsApp on your phone, go to **Settings > Linked devices**, and log the device out.
+- The store's `session.db` holds your linked-device keys. Anyone who copies it can act as that device. To revoke it, open WhatsApp on your phone, go to **Settings > Linked devices**, and log the device out.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
