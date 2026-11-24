@@ -1,6 +1,13 @@
 # wacli-mcp
 
+[![CI](https://github.com/zanellig/wacli-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zanellig/wacli-mcp/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/wacli-mcp)](https://pypi.org/project/wacli-mcp/)
+[![Python versions](https://img.shields.io/pypi/pyversions/wacli-mcp)](https://pypi.org/project/wacli-mcp/)
+[![License: MIT](https://img.shields.io/github/license/zanellig/wacli-mcp)](https://github.com/zanellig/wacli-mcp/blob/main/LICENSE)
+
 An MCP server that lets AI agents such as Claude Code and Codex read your WhatsApp and send messages for you. It wraps [wacli](https://github.com/openclaw/wacli), an open-source WhatsApp client that links to your account as a device, the way WhatsApp Web does.
+
+This is alpha software. Read the [changelog](https://github.com/zanellig/wacli-mcp/blob/main/CHANGELOG.md), the [release notes](https://github.com/zanellig/wacli-mcp/releases), and the [security policy](https://github.com/zanellig/wacli-mcp/security/policy) before you install it.
 
 Ask your agent things like:
 
@@ -191,7 +198,7 @@ What it does not protect against:
 - Anything the agent reads goes to the model provider that runs the agent.
 - The store's `session.db` holds your linked-device keys. Anyone who copies it can act as that device. To revoke it, open WhatsApp on your phone, go to **Settings > Linked devices**, and log the device out.
 
-See [SECURITY.md](SECURITY.md) to report a vulnerability.
+See the [security policy](https://github.com/zanellig/wacli-mcp/security/policy) to report a vulnerability. Fixes are listed in the [changelog](https://github.com/zanellig/wacli-mcp/blob/main/CHANGELOG.md).
 
 ## Development
 
