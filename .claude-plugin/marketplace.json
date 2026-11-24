@@ -1,0 +1,16 @@
+{
+  "name": "zanellig-wacli",
+  "metadata": {
+    "description": "WhatsApp integration for Claude Code through wacli."
+  },
+  "owner": {
+    "name": "zanellig"
+  },
+  "plugins": [
+    {
+      "name": "wacli-mcp",
+      "source": "./plugins/wacli-mcp",
+      "description": "Search WhatsApp chats and messages and send replies through your paired wacli account."
+    }
+  ]
+}

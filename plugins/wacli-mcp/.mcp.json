@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "whatsapp": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "wacli-mcp==0.1.0"
+      ]
+    }
+  }
+}
