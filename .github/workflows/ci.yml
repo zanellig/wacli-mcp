@@ -27,3 +27,21 @@ jobs:
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync basedpyright
       - run: uv run --no-sync pytest
+
+  transcription:
+    name: ${{ matrix.os }} / transcription extra
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          python-version: "3.13"
+      # Installs the native stack (faster-whisper, CTranslate2, PyAV) so the decode and import tests run.
+      - run: uv sync --locked --extra transcribe
+      # Fails, rather than skipping tests, if a native library installed but does not load.
+      - run: uv run --no-sync python -c "import av, ctranslate2, faster_whisper, numpy"
+      - run: uv run --no-sync pytest tests/test_media.py

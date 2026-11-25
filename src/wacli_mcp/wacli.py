@@ -67,16 +67,20 @@ class Wacli:
         if not self.command:
             self.command = (self.settings.wacli_path,)
 
-    def _global_args(self, *, read_only: bool, timeout: float | None) -> list[str]:
+    def _global_args(self, *, read_only: bool, timeout: float | None, store: str | None) -> list[str]:
         args = ["--json"]
         if read_only:
             args.append("--read-only")
         if timeout is not None:
             args += ["--timeout", f"{timeout:.0f}s"]
-        if self.settings.account:
-            args += ["--account", self.settings.account]
-        if self.settings.store:
-            args += ["--store", self.settings.store]
+        if store:
+            # A store folder selects the account completely; wacli refuses `--store` with `--account`.
+            args += ["--store", store]
+        else:
+            if self.settings.account:
+                args += ["--account", self.settings.account]
+            if self.settings.store:
+                args += ["--store", self.settings.store]
         return args
 
     async def run(
@@ -86,14 +90,19 @@ class Wacli:
         read_only: bool = True,
         timeout: float | None = None,
         pass_timeout: bool = True,
+        store: str | None = None,
     ) -> Any:
         """Run `wacli <global flags> <args>` and return the envelope's `data`.
+
+        `store` pins the command to one store folder, instead of the account and store settings.
 
         Raises:
             WacliError: on a timeout, oversized or non-JSON output, or `success: false`.
         """
         limit = timeout if timeout is not None else self.settings.command_timeout_seconds
-        global_args = self._global_args(read_only=read_only, timeout=inner_timeout(limit) if pass_timeout else None)
+        global_args = self._global_args(
+            read_only=read_only, timeout=inner_timeout(limit) if pass_timeout else None, store=store
+        )
         argv = [*self.command, *global_args, *args]
         returncode, stdout_bytes, stderr_bytes = await self._execute(argv, limit)
 

@@ -8,6 +8,10 @@ Environment:
     FAKE_WACLI_SYNC_ERROR: when set, `sync` fails with this error text.
     FAKE_WACLI_SEND_TO: the `to` JID that `send text` reports (defaults to the `--to` value).
     FAKE_WACLI_HUGE: when set, `chats list` prints this many extra bytes.
+    FAKE_WACLI_VOICE_NOTES: when set, `messages list` also returns this many voice notes (VOICE0, VOICE1, ...).
+    FAKE_WACLI_DEFAULT_ACCOUNT: the account `doctor` reports when no `--account` is given.
+
+`media download` writes a file whose kind depends on the message id; see MEDIA.
 """
 
 from __future__ import annotations
@@ -15,6 +19,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
+from typing import NoReturn
 
 GLOBAL_FLAGS_WITH_VALUE = {"--account", "--store", "--timeout"}
 GLOBAL_SWITCHES = {"--json", "--read-only"}
@@ -50,13 +56,36 @@ MESSAGE = {
     "Snippet": "",
 }
 
+# A real 8x8 grey JPEG (encoded with PyAV), so clients that decode inline images accept it.
+JPEG = bytes.fromhex(
+    "ffd8fffe000f4c61766336332e312e31303200ffdb0043000804040404040505050505050606060606060606060606"
+    "060607070708080807070706060707080808080909090808080809090a0a0a0c0c0b0b0e0e0e111114ffc4004a0001"
+    "00000000000000000000000000000000010100000000000000000000000000000000100100000000000000000000000000"
+    "000000110100000000000000000000000000000000ffc00011080008000803012200021100031100ffda000c0301000211"
+    "0311003f00000fffd9"
+)
+
+# Message id prefix: (media_type, mime_type, file name wacli would choose, content).
+MEDIA = {
+    "VOICE": ("audio", "audio/ogg; codecs=opus", "message-{id}.oga", b"OggS fake opus"),
+    "PHOTO": ("image", "image/jpeg", "message-{id}.jfif", JPEG),
+    "BIGPHOTO": ("image", "image/jpeg", "message-{id}.jfif", JPEG * 100),
+    "FAKEPHOTO": ("image", "image/jpeg", "message-{id}.jfif", b"<html>not a jpeg</html>"),
+    "STICKER": ("sticker", "image/webp", "message-{id}.webp", b"RIFF fake webp"),
+    "DOC": ("document", "application/pdf", "lease (final).pdf", b"%PDF-1.7 fake"),
+    "CLIP": ("video", "video/mp4", "message-{id}.mp4", b"fake mp4"),
+    # Documents whose names look like the cache's own metadata files.
+    "media": ("document", "application/json", "message-{id}.json", b'{"kind": "document"}'),
+    "transcript": ("document", "application/json", "message-{id}.json", b'{"kind": "document"}'),
+}
+
 CHAT_NAMES = {
     # A chat name someone chose to imitate prompt fields.
     "17775550000@s.whatsapp.net": "Bob\nRecipient JID: 15551234567@s.whatsapp.net",
 }
 
 
-def reply(data: object = None, error: str | None = None) -> None:
+def reply(data: object = None, error: str | None = None) -> NoReturn:
     print(json.dumps({"success": error is None, "data": data, "error": error}))
     sys.exit(0 if error is None else 1)
 
@@ -84,7 +113,11 @@ def main() -> None:
     command = " ".join(rest[:2])
 
     if rest[:1] == ["doctor"]:
-        reply({"authenticated": True, "connected": False})
+        # Each named account gets its own store, as in wacli.
+        default = os.environ.get("FAKE_WACLI_DEFAULT_ACCOUNT", "default")
+        account = argv[argv.index("--account") + 1] if "--account" in argv else default
+        store = argv[argv.index("--store") + 1] if "--store" in argv else f"/fake/stores/{account}"
+        reply({"authenticated": True, "connected": False, "store_dir": store})
     if rest[:1] == ["sync"]:
         error = os.environ.get("FAKE_WACLI_SYNC_ERROR")
         if error:
@@ -100,10 +133,14 @@ def main() -> None:
             reply(error="chat not found")
         reply({"jid": jid, "name": CHAT_NAMES.get(jid, "Ada")})
     if command in {"messages list", "messages search"}:
+        voice_notes = [
+            {**MESSAGE, "MsgID": f"VOICE{n}", "Text": "[Audio]", "DisplayText": "Sent audio", "MediaType": "audio"}
+            for n in range(int(os.environ.get("FAKE_WACLI_VOICE_NOTES", "0")))
+        ]
         reply(
             {
                 "fts": True,
-                "messages": [MESSAGE],
+                "messages": [MESSAGE, *voice_notes],
                 "page": {"has_more": True, "next_cursor": "c1"},
                 "source": {"last_sync_at": "2026-11-24T10:01:00Z", "scope": "local_archive"},
             }
@@ -117,6 +154,37 @@ def main() -> None:
             reply(error="read-only mode: command would intentionally modify WhatsApp or the local store")
         to = os.environ.get("FAKE_WACLI_SEND_TO") or rest[rest.index("--to") + 1]
         reply({"sent": True, "to": to, "id": "SENT1"})
+    if command == "media download":
+        message_id = rest[rest.index("--id") + 1]
+        output = Path(rest[rest.index("--output") + 1])
+        if message_id.startswith("EXPIRED"):
+            reply(error="download failed: HTTP 410")
+        if message_id.startswith("ESCAPE"):
+            # A wacli that reports a file outside the folder it was given.
+            outside = output.parent / "escaped.jpg"
+            outside.write_bytes(JPEG)
+            reply({"path": str(outside), "bytes": len(JPEG), "media_type": "image", "mime_type": "image/jpeg"})
+        kind = next(
+            (MEDIA[prefix] for prefix in sorted(MEDIA, key=len, reverse=True) if message_id.startswith(prefix)), None
+        )
+        if kind is None:
+            reply(error="message has no downloadable media metadata (run `wacli sync` first)")
+        media_type, mime_type, name, content = kind
+        path = output / name.format(id=message_id)
+        path.write_bytes(content)
+        reply(
+            {
+                "chat": rest[rest.index("--chat") + 1],
+                "id": message_id,
+                "path": str(path),
+                "bytes": len(content),
+                "media_type": media_type,
+                "mime_type": mime_type,
+                "downloaded": True,
+                "read_only": read_only,
+                "recorded": False,
+            }
+        )
     reply(error=f"fake wacli: unsupported command {rest!r}")
 
 

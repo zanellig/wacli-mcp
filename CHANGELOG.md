@@ -6,6 +6,18 @@ Every release has a page with these notes on the [releases page](https://github.
 
 ## [Unreleased]
 
+### Added
+
+- Agent sessions share one transcription service instead of each loading Whisper, so the model takes GPU memory once per machine. The first session that transcribes starts it in the background; it talks to sessions over a local, key-authenticated pipe or socket and exits after `WACLI_MCP_TRANSCRIBE_IDLE_MINUTES` without work. A file several sessions ask for at once is transcribed once. `WACLI_MCP_TRANSCRIBE_SHARED=false` keeps transcription in each session.
+- `get_media` downloads the attachments of up to 20 messages (photos, voice notes, videos, stickers and documents) and returns their local paths. It also returns JPEG and PNG photos up to 1 MB each, and 4 MB in total, inline, so the model sees them directly. Files are saved in a cache folder, named by message id with an extension that matches their type, and reused on later calls for the same chat, message and wacli account.
+- Local transcription with [faster-whisper](https://github.com/SYSTRAN/faster-whisper): `get_media` with `transcribe: true` returns the text of voice notes, audio and video up to an hour long, and `list_messages` with `transcribe_audio: true` adds transcripts to the newest 20 voice notes it returns. Audio stays on your computer. Install the `transcribe` extra, or `transcribe-cuda` for an NVIDIA GPU on Windows. Without it, both tools still return files and transcripts saved earlier, and say how to enable transcription.
+- Long transcripts are shortened to keep a result under `WACLI_MCP_MAX_OUTPUT_CHARS`, with a path to the full text. A repeated request waits for a transcription that is still running instead of starting a second one.
+- Settings for the media folder, inline photo size, and the transcription model, device and language. `whatsapp_status` reports the media folder and whether transcription is available.
+
+### Changed
+
+- Results now label attachments and transcripts as untrusted, like message text.
+
 ## [0.1.0] - 2026-11-24
 
 First release. It is alpha software: it works with real accounts, and its interface can still change before 1.0. It needs [wacli](https://github.com/openclaw/wacli) 0.26 or later and Python 3.11 or later.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -28,8 +29,9 @@ class Settings(BaseSettings):
     read_only: bool = Field(
         default=False,
         description=(
-            "Hide the send tool and skip the pre-read sync, so no tool connects to WhatsApp "
-            "or writes the local store. Run `wacli sync --follow` separately to keep reads current."
+            "Hide the send tool and skip the pre-read sync, so no tool connects to WhatsApp as your linked "
+            "device or writes wacli's local store. get_media still downloads attachments from WhatsApp's media "
+            "servers. Run `wacli sync --follow` separately to keep reads current."
         ),
     )
     send_confirmation: Literal["client", "server"] = Field(
@@ -75,4 +77,41 @@ class Settings(BaseSettings):
         default=60_000,
         gt=1_000,
         description="Truncate tool results longer than this.",
+    )
+    media_dir: Path | None = Field(
+        default=None,
+        description=(
+            "Where get_media saves attachments and transcripts. Default: `wacli-mcp/media` in the user cache "
+            "directory (`%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `~/.cache` on Linux)."
+        ),
+    )
+    inline_image_max_bytes: int = Field(
+        default=1_000_000,
+        ge=0,
+        description="get_media also returns images up to this size inline, so the model sees them. 0 turns it off.",
+    )
+    transcribe_model: str = Field(
+        default="large-v3-turbo",
+        min_length=1,
+        description="faster-whisper model name or local model directory used for transcription.",
+    )
+    transcribe_device: Literal["auto", "cuda", "cpu"] = Field(
+        default="auto",
+        description="`auto` uses an NVIDIA GPU when one works and falls back to the CPU.",
+    )
+    transcribe_shared: bool = Field(
+        default=True,
+        description=(
+            "Transcribe in one background service that every wacli-mcp session shares, so the model is "
+            "loaded once per machine instead of once per agent session. `false` loads it in each session."
+        ),
+    )
+    transcribe_idle_minutes: float = Field(
+        default=10,
+        gt=0,
+        description="The shared transcription service exits after this long without work, freeing GPU memory.",
+    )
+    transcribe_language: str | None = Field(
+        default=None,
+        description="Language code such as `es` or `en`. Unset: Whisper detects the language of each file.",
     )

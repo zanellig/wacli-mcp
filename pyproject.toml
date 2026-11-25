@@ -22,10 +22,25 @@ classifiers = [
     "Topic :: Communications :: Chat",
 ]
 dependencies = [
-    "anyio>=4.5",
+    "anyio>=4.11",
     "mcp>=2.3,<3",
     "pydantic>=2.7",
     "pydantic-settings>=2.6",
+]
+
+[project.optional-dependencies]
+# Local transcription for get_media and list_messages. Runs on the CPU, or on an NVIDIA GPU when the
+# CUDA 12 and cuDNN 9 libraries are installed.
+transcribe = [
+    "faster-whisper>=1.1",
+    "av>=12",
+    "numpy>=1.26",
+]
+# The same, plus the CUDA libraries as wheels, so an NVIDIA GPU works on Windows without a CUDA install.
+transcribe-cuda = [
+    "wacli-mcp[transcribe]",
+    "nvidia-cublas-cu12>=12.4; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12>=9,<10; sys_platform == 'win32'",
 ]
 
 [project.urls]
@@ -55,6 +70,10 @@ line-length = 120
 [tool.ruff.lint]
 extend-select = ["I", "B", "UP", "SIM", "RUF", "BLE"]
 
+[tool.ruff.lint.isort]
+# Test helpers in tests/support.py.
+known-local-folder = ["support", "fake_wacli"]
+
 [tool.basedpyright]
 pythonVersion = "3.11"
 include = ["src", "tests"]
@@ -65,3 +84,7 @@ venv = ".venv"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.uv]
+# Lock versions of the CUDA wheels that exist for Windows; the newest cuBLAS is Linux-only.
+required-environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]

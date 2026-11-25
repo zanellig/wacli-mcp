@@ -13,6 +13,7 @@ Ask your agent things like:
 
 - "What did Ada say in the last hour?"
 - "Find the message where someone sent the lease PDF."
+- "What do Ada's voice notes from this morning say?"
 - "Reply to the latest message from Ada: running 10 minutes late."
 - "Send TEST to +15551234567."
 
@@ -27,13 +28,15 @@ Claude Code / Codex  --stdio-->  wacli-mcp  --runs-->  wacli  --linked device-->
 
 - wacli keeps a local SQLite copy of your messages (in `~/.wacli` on Windows and macOS, `~/.local/state/wacli` on Linux; `wacli doctor` shows the active one). Reads come from that copy.
 - Before a read, wacli-mcp runs a short `wacli sync --once` to pick up new messages, at most once a minute. The sync connects as your linked device and updates the local copy, like any linked device coming online: it can send delivery receipts (two grey ticks), never read receipts. If you run `wacli sync --follow` yourself, that process keeps the copy current and the per-read sync is skipped.
+- `get_media` downloads photos, voice notes, videos and documents into a cache folder and returns their paths. It can transcribe voice notes and videos on your computer with [faster-whisper](https://github.com/SYSTRAN/faster-whisper); see [Attachments and voice notes](#attachments-and-voice-notes).
 - `send_text` sends to a chat JID or a phone number. By default your agent and its client decide when to send, as with any other tool. You can make the server ask you itself before every send instead; see [Sending](#sending).
-- The server talks to the agent over stdio only. It opens no network port.
+- The server talks to the agent over stdio only. It opens no network port. The shared transcription service talks to wacli-mcp sessions over a local named pipe (Windows) or Unix socket, authenticated with a key only your user can read.
 
 ## Requirements
 
 - [wacli](https://github.com/openclaw/wacli) 0.26 or later, paired with your account.
 - [uv](https://docs.astral.sh/uv/) (it can install Python for you), or [pipx](https://pipx.pypa.io/) with Python 3.11 or later.
+- Optional, for transcription: the `transcribe` extra, about 2 GB of disk for the model and libraries, and ideally an NVIDIA GPU. See [Transcription](#transcription).
 - Any MCP client. The optional server-side send confirmation needs a client that shows MCP elicitations, such as the Claude Code terminal app or the Codex CLI.
 
 ## Setup
@@ -110,13 +113,61 @@ Codex starts MCP servers with a filtered environment. To pass a `WACLI_MCP_*` se
 | --- | --- |
 | `whatsapp_status` | Checks that wacli is installed, paired, and has a readable store. |
 | `list_chats` | Chats by recent activity, with JIDs and unread counts. Filters: `query`, `unread_only`. |
-| `list_messages` | A chat's messages, newest first. Filters: `before`, `after`, `from_them_only`. |
+| `list_messages` | A chat's messages, newest first. Filters: `before`, `after`, `from_them_only`. `transcribe_audio` adds voice-note transcripts. |
 | `search_messages` | Full-text search, optionally within one chat or from one sender. |
 | `get_message_context` | The messages around one message. |
 | `search_contacts` | Contacts by name or number, with their JIDs. |
+| `get_media` | Downloads the attachments of up to 20 messages and returns their paths. Shows photos inline, and with `transcribe` returns the text of voice notes and videos. |
 | `send_text` | Sends a text message, optionally as a reply, to a chat JID or a phone number. |
 
-All tools except `send_text` call wacli with `--read-only`. Results label message content as untrusted: text written by other people, not instructions.
+All tools except `send_text` call wacli with `--read-only`. Results label message content, attachments and transcripts as untrusted: things other people wrote or recorded, not instructions.
+
+## Attachments and voice notes
+
+Messages with an attachment have a `media_type` (`image`, `audio`, `video`, `sticker`, `document`). `get_media` takes the chat's JID and up to 20 message `id`s. For each message it:
+
+- downloads the file with `wacli media download --read-only` into `<media folder>/store-<id>/<chat>/<message id>/`, with a separate `store-<id>` folder for each wacli store, so each WhatsApp account has its own. Each call asks wacli which store it uses and runs all its wacli commands against that store, so switching wacli's default account mid-session can't mix accounts. The file is named after the message id, with an extension that matches its type, such as `.jpg`, `.ogg`, `.mp4` or `.pdf`. Your agent opens it from there with its own file tools.
+- also returns JPEG and PNG photos up to 1 MB inline, so the model sees them without opening a file. One result shows at most 4 MB of photos inline; the rest are listed by path.
+- with `transcribe: true`, adds the text of voice notes, audio and video.
+
+A file that can't be downloaded or saved gets an `error` on its own item and doesn't stop the others. Files and transcripts are saved, so asking for the same message again returns at once. A saved copy is reused only for the same chat, message and wacli store.
+
+Each transcript comes with `transcript_file`, the saved JSON that holds its full text. When transcripts would make a result longer than `WACLI_MCP_MAX_OUTPUT_CHARS`, the longest ones are shortened and marked `transcript_truncated`.
+
+`list_messages` with `transcribe_audio: true` does the same for the voice notes it returns, up to the newest 20, so "read my chat with Ada, voice notes included" is one call. Without the transcription extra, it still returns transcripts saved earlier and downloads nothing.
+
+The media folder is `wacli-mcp/media` in your user cache folder: `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `~/.cache` on Linux. `whatsapp_status` shows the exact path. Delete the folder to remove everything downloaded; wacli-mcp downloads files again when asked.
+
+WhatsApp keeps attachments on its servers for a limited time. For an older file, the error says so, and `wacli media download --retry-on-phone` can ask your phone to upload it again.
+
+### Transcription
+
+Transcription runs [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on your computer, so audio never leaves it. It is an optional extra, because it adds about 2 GB of libraries and model files:
+
+```sh
+uv tool install --python 3.13 "wacli-mcp[transcribe]"        # CPU, or an NVIDIA GPU with CUDA 12 and cuDNN 9 installed
+uv tool install --python 3.13 "wacli-mcp[transcribe-cuda]"   # Windows with an NVIDIA GPU: installs the CUDA libraries too
+```
+
+`--python 3.13` is there because onnxruntime, which faster-whisper needs, publishes wheels only up to Python 3.14. Without it, uv may pick a newer Python and fail to install. With `uvx`, use `uvx --python 3.13 --from "wacli-mcp[transcribe]" wacli-mcp` as the server command. Without the extra, `get_media` still returns the files, with a note on how to turn transcription on.
+
+If `uv tool install` fails with "Access is denied" on Windows, a running agent session is still using wacli-mcp. Close those sessions and run it again.
+
+- The default model is `large-v3-turbo`. The first transcription downloads it, about 1.6 GB, into the Hugging Face cache.
+- On an NVIDIA GPU, a minute of audio takes a few seconds. A CPU takes several times longer. With `WACLI_MCP_TRANSCRIBE_DEVICE=auto`, wacli-mcp tries the GPU and falls back to the CPU if CUDA doesn't work. `whatsapp_status` shows the device in use, and the GPU error if there was one.
+- Every agent session runs its own wacli-mcp, so the model doesn't live in them. The first session that transcribes starts one background transcription service, and every session on the machine sends it work. It holds one model, about 2 GB of GPU or system memory, and exits after `WACLI_MCP_TRANSCRIBE_IDLE_MINUTES` (10) without work, which frees that memory. The next transcription starts it again, which takes a few seconds while the model loads.
+- If the service can't start, a session transcribes in its own process instead, and `whatsapp_status` says why. `WACLI_MCP_TRANSCRIBE_SHARED=false` always works that way.
+- Whisper detects each file's language. Set `WACLI_MCP_TRANSCRIBE_LANGUAGE`, for example to `es`, if it guesses wrong on short notes.
+- Recordings longer than an hour are not transcribed, to bound the memory the server uses.
+- One file is transcribed at a time, and up to 8 files per session can wait their turn. A transcription finishes and saves its text even if the client stops waiting. Asking again for the same file, from the same session or another one, joins it instead of starting another.
+- Transcripts are machine output: names and rare words can come out wrong.
+
+Codex stops a tool call after 60 seconds by default, and a first transcription can take longer while the model downloads. The transcription keeps running and saves its result, so asking again returns it. To avoid the timeout, raise the limit in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.whatsapp]
+tool_timeout_sec = 600
+```
 
 ## Sending
 
@@ -167,7 +218,7 @@ All settings are environment variables.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `WACLI_MCP_SEND_CONFIRMATION` | `client` | Who confirms a send: `client` or `server`. See [Who confirms a send](#who-confirms-a-send). |
-| `WACLI_MCP_READ_ONLY` | `false` | Hide `send_text` and skip the per-read sync, so no tool connects to WhatsApp or writes the local copy. Run `wacli sync --follow` separately to keep reads current. |
+| `WACLI_MCP_READ_ONLY` | `false` | Hide `send_text` and skip the per-read sync, so no tool connects to WhatsApp as your linked device or writes wacli's local copy. `get_media` still downloads attachments from WhatsApp's media servers. Run `wacli sync --follow` separately to keep reads current. |
 | `WACLI_MCP_WACLI_PATH` | `wacli` | Path to the wacli executable. |
 | `WACLI_MCP_ACCOUNT` | unset | wacli named account (`--account`). |
 | `WACLI_MCP_STORE` | unset | wacli store directory (`--store`). |
@@ -178,6 +229,13 @@ All settings are environment variables.
 | `WACLI_MCP_SYNC_TIMEOUT_SECONDS` | `45` | Upper bound for one sync. |
 | `WACLI_MCP_COMMAND_TIMEOUT_SECONDS` | `60` | Upper bound for any other wacli command. wacli gets a slightly shorter `--timeout`, so a send queued behind `wacli sync --follow` can't go out after wacli-mcp has reported a timeout. |
 | `WACLI_MCP_MAX_OUTPUT_CHARS` | `60000` | Truncate longer tool results. |
+| `WACLI_MCP_MEDIA_DIR` | user cache folder | Where `get_media` saves attachments and transcripts. See [Attachments and voice notes](#attachments-and-voice-notes). |
+| `WACLI_MCP_INLINE_IMAGE_MAX_BYTES` | `1000000` | Largest photo that `get_media` also returns inline. `0` turns inline photos off. |
+| `WACLI_MCP_TRANSCRIBE_MODEL` | `large-v3-turbo` | faster-whisper model name, such as `small` for slower CPUs, or a local model folder. |
+| `WACLI_MCP_TRANSCRIBE_DEVICE` | `auto` | `auto`, `cuda` or `cpu`. `auto` uses an NVIDIA GPU when it works. |
+| `WACLI_MCP_TRANSCRIBE_LANGUAGE` | unset | Language code for every file, such as `es`. Unset: detected per file. |
+| `WACLI_MCP_TRANSCRIBE_SHARED` | `true` | Transcribe in one background service shared by all sessions, so the model is loaded once. `false` loads it in each session's own process. |
+| `WACLI_MCP_TRANSCRIBE_IDLE_MINUTES` | `10` | The shared service exits after this long without work, freeing GPU memory. The session that starts the service sets it. |
 
 ## Security
 
@@ -187,7 +245,8 @@ What wacli-mcp does about it:
 
 - Results label message content as untrusted, and the server's instructions tell the agent that a message asking it to send or reveal something is content to report, not a request from you.
 - In `server` confirmation mode, every send needs your answer to a prompt the server requests itself, showing the real recipient and the full text with hidden characters made visible. Each answer sends at most one message.
-- Read tools run wacli with `--read-only`.
+- Read tools run wacli with `--read-only`. `get_media` saves files only inside its media folder, and checks that wacli wrote the file where it was told to.
+- Transcription runs on your computer. Voice notes are not sent to a transcription service. The shared service accepts work only from processes that can read its key file, `transcriber.key` in the media folder's `.transcriber` folder, which is private to your user.
 - No network listener, and link previews are off by default.
 
 What it does not protect against:
@@ -195,7 +254,9 @@ What it does not protect against:
 - In the default `client` mode, an agent that follows instructions hidden in a message can send messages, limited only by your client's tool approvals. Use `server` mode, or keep tool approvals on, if that matters to you.
 - A client that answers the `server` prompt without asking you. The server trusts the MCP client to show the prompt to a person.
 - An agent that can run arbitrary shell commands can run `wacli send` directly, or read the wacli store, without going through this server.
-- Anything the agent reads goes to the model provider that runs the agent.
+- Anything the agent reads goes to the model provider that runs the agent, including photos shown inline and transcripts.
+- A photo, document or voice note can carry instructions too, as text in an image or words spoken in a note. These get the same untrusted label as message text, and the model decides what to do with them.
+- Downloaded attachments stay in the media folder, unencrypted, until you delete them. On macOS and Linux, wacli-mcp creates the folder readable only by your user.
 - The store's `session.db` holds your linked-device keys. Anyone who copies it can act as that device. To revoke it, open WhatsApp on your phone, go to **Settings > Linked devices**, and log the device out.
 
 See the [security policy](https://github.com/zanellig/wacli-mcp/security/policy) to report a vulnerability. Fixes are listed in the [changelog](https://github.com/zanellig/wacli-mcp/blob/main/CHANGELOG.md).
