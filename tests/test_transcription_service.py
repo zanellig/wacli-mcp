@@ -11,6 +11,7 @@ from multiprocessing import AuthenticationError
 from multiprocessing.connection import Client
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -136,3 +137,16 @@ def test_the_server_shares_transcription_by_default(media_dir: Path) -> None:
         server = make_server(transcribe_shared=shared)
         assert server is not None
     assert isinstance(SharedTranscriber(Settings()).status()["service"], str)
+
+
+def test_a_service_from_another_version_is_not_used(sessions: list[SharedTranscriber], tmp_path: Path) -> None:
+    client = session(sessions)
+    client.transcribe(audio(tmp_path, "one"))
+    newer = SharedTranscriber(
+        Settings(),
+        service_command=[sys.executable, str(FAKE_SERVICE)],
+        fallback=FakeTranscriber(text="local words"),
+    )
+    with patch("wacli_mcp.transcription_service.PROTOCOL", PROTOCOL + 1):
+        assert newer.transcribe(audio(tmp_path, "two")).text == "local words"
+        assert "protocol" in newer.status()["service_error"]
