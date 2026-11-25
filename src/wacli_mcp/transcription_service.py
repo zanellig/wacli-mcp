@@ -172,7 +172,11 @@ class _Service:
 
     def respond(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, dict) or request.get("protocol") != PROTOCOL:
-            return {"ok": False, "error": f"this transcription service speaks protocol {PROTOCOL}"}
+            return {
+                "ok": False,
+                "protocol": PROTOCOL,
+                "error": f"this transcription service speaks protocol {PROTOCOL}",
+            }
         op = request.get("op")
         if op == "status":
             return {"ok": True, "status": self.status()}
@@ -381,7 +385,12 @@ class SharedTranscriber:
             except (EOFError, OSError, ValueError) as exc:
                 failure = exc
                 continue
-            return response if isinstance(response, dict) else None
+            if not isinstance(response, dict):
+                return None
+            if response.get("protocol", PROTOCOL) != PROTOCOL:
+                # A service started by another wacli-mcp version; it exits once idle.
+                raise ServiceUnavailable(str(response.get("error")))
+            return response
         raise ServiceUnavailable(f"the transcription service stopped answering: {failure}")
 
     def _open(self) -> Channel:
