@@ -9,6 +9,7 @@ Environment:
     FAKE_WACLI_SEND_TO: the `to` JID that `send text` reports (defaults to the `--to` value).
     FAKE_WACLI_HUGE: when set, `chats list` prints this many extra bytes.
     FAKE_WACLI_VOICE_NOTES: when set, `messages list` also returns this many voice notes (VOICE0, VOICE1, ...).
+    FAKE_WACLI_DEFAULT_ACCOUNT: the account `doctor` reports when no `--account` is given.
 
 `media download` writes a file whose kind depends on the message id; see MEDIA.
 """
@@ -113,7 +114,8 @@ def main() -> None:
 
     if rest[:1] == ["doctor"]:
         # Each named account gets its own store, as in wacli.
-        account = argv[argv.index("--account") + 1] if "--account" in argv else "default"
+        default = os.environ.get("FAKE_WACLI_DEFAULT_ACCOUNT", "default")
+        account = argv[argv.index("--account") + 1] if "--account" in argv else default
         store = argv[argv.index("--store") + 1] if "--store" in argv else f"/fake/stores/{account}"
         reply({"authenticated": True, "connected": False, "store_dir": store})
     if rest[:1] == ["sync"]:

@@ -126,7 +126,7 @@ All tools except `send_text` call wacli with `--read-only`. Results label messag
 
 Messages with an attachment have a `media_type` (`image`, `audio`, `video`, `sticker`, `document`). `get_media` takes the chat's JID and up to 20 message `id`s. For each message it:
 
-- downloads the file with `wacli media download --read-only` into `<media folder>/store-<id>/<chat>/<message id>/`, with a separate `store-<id>` folder for each wacli store, so each WhatsApp account has its own. The file is named after the message id, with an extension that matches its type, such as `.jpg`, `.ogg`, `.mp4` or `.pdf`. Your agent opens it from there with its own file tools.
+- downloads the file with `wacli media download --read-only` into `<media folder>/store-<id>/<chat>/<message id>/`, with a separate `store-<id>` folder for each wacli store, so each WhatsApp account has its own. Each call asks wacli which store it uses and runs all its wacli commands against that store, so switching wacli's default account mid-session can't mix accounts. The file is named after the message id, with an extension that matches its type, such as `.jpg`, `.ogg`, `.mp4` or `.pdf`. Your agent opens it from there with its own file tools.
 - also returns JPEG and PNG photos up to 1 MB inline, so the model sees them without opening a file. One result shows at most 4 MB of photos inline; the rest are listed by path.
 - with `transcribe: true`, adds the text of voice notes, audio and video.
 
