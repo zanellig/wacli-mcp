@@ -112,6 +112,16 @@ def _entry_name(value: str) -> str:
     return f"~{_SAFE_NAME.sub('_', value)}-{hashlib.sha256(value.encode()).hexdigest()[:10]}"
 
 
+def _real_store_path(store: str) -> str:
+    """The store folder wacli picks for `store`, with links then resolved.
+
+    wacli cleans the path as text first (Go's `filepath.Abs` drops `x/..` without following `x`), so
+    this does the same with `abspath` before `realpath` follows links. In the other order,
+    `link/../store` would name a different folder than the one wacli opens.
+    """
+    return os.path.realpath(os.path.abspath(store))
+
+
 def _file_stem(message_id: str) -> str:
     """The attachment's file name without extension: only letters, digits, `_` and `-`, never dot-named."""
     stem = _SAFE_NAME.sub("_", message_id)
@@ -190,7 +200,7 @@ class MediaLibrary:
         so `Team` and `team` may be different stores.
         """
         if self.settings.store and not self.settings.account:
-            return os.path.realpath(self.settings.store)
+            return _real_store_path(self.settings.store)
         try:
             doctor = await self.wacli.run(["doctor"])
         except WacliError as exc:
@@ -198,7 +208,7 @@ class MediaLibrary:
         store = doctor.get("store_dir") if isinstance(doctor, dict) else None
         if not isinstance(store, str) or not store:
             raise MediaError("wacli did not report its store folder")
-        return os.path.realpath(store)
+        return _real_store_path(store)
 
     def _folder(self, store: str, chat_jid: str, message_id: str) -> tuple[Path, dict[str, Any]]:
         store_root = (self.root / f"store-{hashlib.sha256(store.encode()).hexdigest()[:12]}").resolve()
