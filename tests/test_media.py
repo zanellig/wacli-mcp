@@ -625,3 +625,15 @@ def test_store_paths_that_differ_only_in_case_stay_separate() -> None:
     )
     assert team != lower
     assert team_identity["store_dir"] != lower_identity["store_dir"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="creating symlinks needs extra privileges on Windows")
+async def test_store_with_a_link_then_dotdot_matches_wacli(tmp_path: Path) -> None:
+    """wacli drops `current/..` as text before following links, so `current/../store` is accounts/store."""
+    (tmp_path / "archive" / "team").mkdir(parents=True)
+    (tmp_path / "archive" / "store").mkdir()
+    (tmp_path / "accounts" / "store").mkdir(parents=True)
+    (tmp_path / "accounts" / "current").symlink_to(tmp_path / "archive" / "team", target_is_directory=True)
+    settings = Settings(store=str(tmp_path / "accounts" / "current" / ".." / "store"))
+    library = MediaLibrary(settings, Wacli(settings, command=(sys.executable, str(FAKE_WACLI))), FakeTranscriber())
+    assert await library.resolve_store() == os.path.realpath(tmp_path / "accounts" / "store")
