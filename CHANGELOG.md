@@ -8,8 +8,9 @@ Every release has a page with these notes on the [releases page](https://github.
 
 ### Added
 
-- `get_media` downloads the attachments of up to 20 messages (photos, voice notes, videos, stickers and documents) and returns their local paths. It also returns JPEG and PNG photos up to 1 MB inline, so the model sees them directly. Files are saved in a cache folder, named by message id with an extension that matches their type, and reused on later calls.
-- Local transcription with [faster-whisper](https://github.com/SYSTRAN/faster-whisper): `get_media` with `transcribe: true` returns the text of voice notes, audio and video, and `list_messages` with `transcribe_audio: true` adds transcripts to the newest 20 voice notes it returns. Audio stays on your computer. Install the `transcribe` extra, or `transcribe-cuda` for an NVIDIA GPU on Windows. Without it, both tools still work and say how to enable transcription.
+- `get_media` downloads the attachments of up to 20 messages (photos, voice notes, videos, stickers and documents) and returns their local paths. It also returns JPEG and PNG photos up to 1 MB each, and 4 MB in total, inline, so the model sees them directly. Files are saved in a cache folder, named by message id with an extension that matches their type, and reused on later calls for the same chat, message and wacli account.
+- Local transcription with [faster-whisper](https://github.com/SYSTRAN/faster-whisper): `get_media` with `transcribe: true` returns the text of voice notes, audio and video up to an hour long, and `list_messages` with `transcribe_audio: true` adds transcripts to the newest 20 voice notes it returns. Audio stays on your computer. Install the `transcribe` extra, or `transcribe-cuda` for an NVIDIA GPU on Windows. Without it, both tools still return files and transcripts saved earlier, and say how to enable transcription.
+- Long transcripts are shortened to keep a result under `WACLI_MCP_MAX_OUTPUT_CHARS`, with a path to the full text. A repeated request waits for a transcription that is still running instead of starting a second one.
 - Settings for the media folder, inline photo size, and the transcription model, device and language. `whatsapp_status` reports the media folder and whether transcription is available.
 
 ### Changed

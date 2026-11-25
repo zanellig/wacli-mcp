@@ -4,7 +4,6 @@ No `from __future__ import annotations` here: the SDK evaluates tool signatures,
 `Resolve(confirm_send)` refers to a closure that string annotations cannot see.
 """
 
-import base64
 import json
 import re
 from typing import Annotated, Any
@@ -22,8 +21,9 @@ from mcp.types import ImageContent, TextContent, ToolAnnotations
 from pydantic import BaseModel, Field, StrictBool
 
 from wacli_mcp import __version__
+from wacli_mcp.attachments import MAX_PER_CALL, Attachments
 from wacli_mcp.confirmation import ConfirmationLedger, confirmation_key, confirmation_message
-from wacli_mcp.media import MediaError, MediaFile, MediaLibrary
+from wacli_mcp.media import MediaLibrary
 from wacli_mcp.settings import Settings
 from wacli_mcp.transcription import Transcriber, WhisperTranscriber
 from wacli_mcp.wacli import Wacli, WacliError
@@ -55,11 +55,11 @@ _CHAT_JID_RE = re.compile(r"^[0-9A-Za-z._-]{1,64}@(s\.whatsapp\.net|g\.us|lid|ne
 _PHONE_RE = re.compile(r"^\+?[0-9(][0-9 ().-]{6,30}$")
 _MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _MAX_TEXT_CHARS = 10_000
-_MAX_MEDIA_PER_CALL = 20
-# Inline only formats every client renders, and only files that start like one. A broken image in a
-# tool result can make the model provider reject the whole request.
-_IMAGE_SIGNATURES = {"image/jpeg": b"\xff\xd8\xff", "image/png": b"\x89PNG\r\n\x1a\n"}
 
+# The "world" of these tools is the user's own WhatsApp account. Reads may reach WhatsApp to refresh
+# the store or fetch an attachment, and get_media keeps files in its own cache folder, but no read
+# changes anything in the account or in wacli's store. Codex runs read-only tools without asking,
+# which is what the user wants for reads.
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 SEND = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True)
 
@@ -131,6 +131,7 @@ def build_server(
     wacli = wacli or Wacli(settings)
     transcriber = transcriber or WhisperTranscriber(settings)
     library = MediaLibrary(settings, wacli, transcriber)
+    attachments = Attachments(library, settings)
     ledger = ConfirmationLedger()
     server = MCPServer(
         name="wacli-mcp",
@@ -177,26 +178,6 @@ def build_server(
                 "or a phone number in international format."
             )
         return jid
-
-    def inline_image(media: MediaFile) -> ImageContent | None:
-        signature = _IMAGE_SIGNATURES.get(media.base_mime)
-        if signature is None or media.media_type != "image" or media.bytes > settings.inline_image_max_bytes:
-            return None
-        data = media.path.read_bytes()
-        if not data.startswith(signature):
-            return None
-        return ImageContent(type="image", data=base64.b64encode(data).decode("ascii"), mime_type=media.base_mime)
-
-    async def add_transcript(item: dict[str, Any], media: MediaFile) -> None:
-        try:
-            transcript = await library.transcribe(media)
-        except MediaError as exc:
-            item["transcript_error"] = str(exc)
-            return
-        item["transcript"] = transcript.text
-        if transcript.language:
-            item["transcript_language"] = transcript.language
-        item["duration_seconds"] = transcript.duration_seconds
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def whatsapp_status() -> str:
@@ -249,7 +230,7 @@ def build_server(
             bool,
             Field(
                 description=(
-                    f"Add a `transcript` to voice notes and audio messages, up to the newest {_MAX_MEDIA_PER_CALL}. "
+                    f"Add a `transcript` to voice notes and audio messages, up to the newest {MAX_PER_CALL}. "
                     "Transcription runs on this computer; new voice notes take a few seconds each."
                 )
             ),
@@ -264,35 +245,11 @@ def build_server(
         if from_them_only:
             args.append("--from-them")
         payload = await read_payload(args, compact=True)
-        if transcribe_audio:
-            await add_voice_transcripts(payload)
-        return render(payload)
-
-    async def add_voice_transcripts(payload: dict[str, Any]) -> None:
         result = payload.get("result")
         messages = result.get("messages") if isinstance(result, dict) else None
-        audio = [m for m in messages or [] if m.get("media_type") == "audio"]
-        if not audio:
-            return
-        reason = transcriber.unavailable_reason()
-        if reason:
-            payload["transcription_unavailable"] = reason
-            return
-        for message in audio[:_MAX_MEDIA_PER_CALL]:
-            chat_jid, message_id = message.get("chat_jid"), message.get("id")
-            if not isinstance(chat_jid, str) or not isinstance(message_id, str):
-                continue
-            try:
-                media = await library.fetch(chat_jid, message_id)
-            except MediaError as exc:
-                message["transcript_error"] = str(exc)
-                continue
-            await add_transcript(message, media)
-        if len(audio) > _MAX_MEDIA_PER_CALL:
-            payload["transcripts_note"] = (
-                f"Only the newest {_MAX_MEDIA_PER_CALL} voice notes were transcribed. "
-                "Use `before` to page back, or get_media for specific messages."
-            )
+        if transcribe_audio and isinstance(messages, list):
+            payload.update(await attachments.add_voice_transcripts(messages))
+        return render(payload)
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def search_messages(
@@ -362,7 +319,7 @@ def build_server(
             list[str],
             Field(
                 min_length=1,
-                max_length=_MAX_MEDIA_PER_CALL,
+                max_length=MAX_PER_CALL,
                 description="`id`s of messages in that chat with a photo, voice note, video, sticker or document.",
             ),
         ],
@@ -382,31 +339,10 @@ def build_server(
         ids = list(dict.fromkeys(message_id.strip() for message_id in message_ids))
         if not all(_MESSAGE_ID_RE.fullmatch(message_id) for message_id in ids):
             raise ToolError("message_ids must be message `id`s from list_messages or search_messages")
-        unavailable = transcriber.unavailable_reason() if transcribe else None
-
-        items: list[dict[str, Any]] = []
-        images: list[TextContent | ImageContent] = []
-        for done, message_id in enumerate(ids):
-            await ctx.report_progress(done, len(ids), f"Fetching the attachment of message {message_id}")
-            item: dict[str, Any] = {"id": message_id}
-            items.append(item)
-            try:
-                media = await library.fetch(jid, message_id)
-            except MediaError as exc:
-                item["error"] = str(exc)
-                continue
-            item.update(media_type=media.media_type, mime_type=media.mime_type, bytes=media.bytes, path=str(media.path))
-            image = inline_image(media)
-            if image is not None:
-                item["shown_inline"] = True
-                images += [TextContent(type="text", text=f"Photo from message {message_id}:"), image]
-            if transcribe and unavailable is None and media.is_audio_or_video:
-                await add_transcript(item, media)
-
-        payload: dict[str, Any] = {"notice": UNTRUSTED_NOTICE, "media_dir": str(library.root), "items": items}
-        if unavailable:
-            payload["transcription_unavailable"] = unavailable
-        return [TextContent(type="text", text=render(payload)), *images]
+        media = await attachments.collect(jid, ids, transcribe=transcribe, progress=ctx.report_progress)
+        payload: dict[str, Any] = {"notice": UNTRUSTED_NOTICE, "media_dir": str(library.root), "items": media.items}
+        payload.update(media.notes)
+        return [TextContent(type="text", text=render(payload)), *media.images]
 
     if settings.read_only:
         return server
