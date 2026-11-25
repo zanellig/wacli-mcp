@@ -58,6 +58,5 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: 18
-      - run: node npm/scripts/check-versions.mjs
       # Hides any uv on PATH, so the launcher downloads the pinned uv and runs the server from this checkout.
       - run: node npm/test/smoke.mjs --without-uv

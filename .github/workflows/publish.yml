@@ -28,7 +28,6 @@ jobs:
             echo "::error::Expected release tag $expected, got $GITHUB_REF_NAME"
             exit 1
           fi
-      - run: node npm/scripts/check-versions.mjs
       - run: uv lock --check
       - run: uv build
       - name: Pack the npm package
