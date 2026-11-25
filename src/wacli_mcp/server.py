@@ -4,7 +4,6 @@ No `from __future__ import annotations` here: the SDK evaluates tool signatures,
 `Resolve(confirm_send)` refers to a closure that string annotations cannot see.
 """
 
-import json
 import re
 from typing import Annotated, Any
 
@@ -21,7 +20,7 @@ from mcp.types import ImageContent, TextContent, ToolAnnotations
 from pydantic import BaseModel, Field, StrictBool
 
 from wacli_mcp import __version__
-from wacli_mcp.attachments import MAX_PER_CALL, Attachments
+from wacli_mcp.attachments import MAX_PER_CALL, Attachments, fit_transcripts, to_json
 from wacli_mcp.confirmation import ConfirmationLedger, confirmation_key, confirmation_message
 from wacli_mcp.media import MediaLibrary
 from wacli_mcp.settings import Settings
@@ -56,11 +55,12 @@ _PHONE_RE = re.compile(r"^\+?[0-9(][0-9 ().-]{6,30}$")
 _MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _MAX_TEXT_CHARS = 10_000
 
-# The "world" of these tools is the user's own WhatsApp account. Reads may reach WhatsApp to refresh
-# the store or fetch an attachment, and get_media keeps files in its own cache folder, but no read
-# changes anything in the account or in wacli's store. Codex runs read-only tools without asking,
-# which is what the user wants for reads.
+# No read changes anything in the WhatsApp account or in wacli's store; get_media keeps files only
+# in its own cache folder. Codex runs read-only tools without asking, whatever their open-world hint.
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
+# Reads that can also return content from other people's attachments and, when transcribing for the
+# first time, download a speech model from Hugging Face.
+READ_ONLY_OPEN_WORLD = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True)
 SEND = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True)
 
 
@@ -141,7 +141,7 @@ def build_server(
     )
 
     def render(payload: dict[str, Any]) -> str:
-        text = json.dumps(payload, ensure_ascii=False, indent=1)
+        text = to_json(payload)
         limit = settings.max_output_chars
         if len(text) <= limit:
             return text
@@ -215,7 +215,7 @@ def build_server(
             args.append("--unread")
         return await read(args)
 
-    @server.tool(annotations=READ_ONLY, structured_output=False)
+    @server.tool(annotations=READ_ONLY_OPEN_WORLD, structured_output=False)
     async def list_messages(
         chat: Annotated[str, Field(description="Chat JID, phone number, or exact chat name.")],
         limit: Annotated[int, Field(ge=1, le=200)] = 20,
@@ -249,6 +249,7 @@ def build_server(
         messages = result.get("messages") if isinstance(result, dict) else None
         if transcribe_audio and isinstance(messages, list):
             payload.update(await attachments.add_voice_transcripts(messages))
+            fit_transcripts(payload, messages, settings.max_output_chars)
         return render(payload)
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
@@ -310,7 +311,7 @@ def build_server(
         """Find contacts by name or number. Returns each contact's JID for `list_messages` and `send_text`."""
         return await read(["contacts", "search", "--limit", str(limit), "--", query])
 
-    @server.tool(annotations=READ_ONLY, structured_output=False)
+    @server.tool(annotations=READ_ONLY_OPEN_WORLD, structured_output=False)
     async def get_media(
         chat: Annotated[
             str, Field(description="The messages' `chat_jid`, or the chat's phone number in international format.")
@@ -342,6 +343,7 @@ def build_server(
         media = await attachments.collect(jid, ids, transcribe=transcribe, progress=ctx.report_progress)
         payload: dict[str, Any] = {"notice": UNTRUSTED_NOTICE, "media_dir": str(library.root), "items": media.items}
         payload.update(media.notes)
+        fit_transcripts(payload, media.items, settings.max_output_chars)
         return [TextContent(type="text", text=render(payload)), *media.images]
 
     if settings.read_only:

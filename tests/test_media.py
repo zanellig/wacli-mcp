@@ -16,7 +16,7 @@ import pytest
 from mcp.client import Client
 from mcp.types import CallToolResult, ImageContent, TextContent
 
-from wacli_mcp.media import MediaLibrary, extension_for
+from wacli_mcp.media import MediaError, MediaLibrary, extension_for
 from wacli_mcp.settings import Settings
 from wacli_mcp.transcription import INSTALL_HINT, Transcript, TranscriptionError, WhisperTranscriber, decode_audio
 from wacli_mcp.wacli import Wacli
@@ -358,42 +358,112 @@ async def test_cache_is_scoped_to_the_wacli_account(calls: Calls) -> None:
     assert len(downloads(calls())) == 2 and len(second.calls) == 1
 
 
-async def test_retry_waits_for_the_transcription_already_running() -> None:
-    """A client that times out and asks again must not start a second transcription of the same file."""
-    started, release = threading.Event(), threading.Event()
+class Blocking(FakeTranscriber):
+    """Holds every transcription open until `release` is set."""
 
-    class Blocking(FakeTranscriber):
-        def transcribe(self, path: Path) -> Transcript:
-            self.calls.append(path)
-            started.set()
-            release.wait(10)
-            return Transcript("done", "es", 1.0, "fake", "cpu")
+    def __init__(self) -> None:
+        super().__init__()
+        self.started, self.release = threading.Event(), threading.Event()
 
+    def transcribe(self, path: Path) -> Transcript:
+        self.calls.append(path)
+        self.started.set()
+        self.release.wait(10)
+        return Transcript("done", "es", 1.0, "fake", "cpu")
+
+
+def library_with(transcriber: FakeTranscriber) -> MediaLibrary:
     settings = Settings()
+    return MediaLibrary(settings, Wacli(settings, command=(sys.executable, str(FAKE_WACLI))), transcriber)
+
+
+def transcription_threads() -> int:
+    return sum(thread.name == "wacli-mcp-transcribe" for thread in threading.enumerate())
+
+
+async def test_retries_join_the_transcription_already_running() -> None:
+    """Clients that time out and ask again must not start more transcriptions or more threads."""
     transcriber = Blocking()
-    library = MediaLibrary(settings, Wacli(settings, command=(sys.executable, str(FAKE_WACLI))), transcriber)
+    library = library_with(transcriber)
     media = await library.fetch(JID, "VOICE1")
     results: list[Transcript] = []
 
     async with anyio.create_task_group() as tg:
-        first_call = anyio.CancelScope()
-
-        async def first() -> None:
-            with first_call:
+        for _ in range(5):
+            with anyio.move_on_after(0.1):  # each attempt gives up while the transcription runs
                 await library.transcribe(media)
+        await anyio.to_thread.run_sync(transcriber.started.wait)
+        assert transcription_threads() == 1
 
         async def retry() -> None:
             results.append(await library.transcribe(media))
 
-        tg.start_soon(first)
-        await anyio.to_thread.run_sync(started.wait)
-        first_call.cancel()  # the client gave up; its worker keeps running
         tg.start_soon(retry)
-        await anyio.sleep(0.2)
-        release.set()
+        await anyio.sleep(0.1)
+        transcriber.release.set()
 
     assert [r.text for r in results] == ["done"]
     assert len(transcriber.calls) == 1
+    assert library.transcript_path(media).is_file()
+
+
+async def test_too_many_running_transcriptions_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("wacli_mcp.media.MAX_TRANSCRIPTION_JOBS", 1)
+    transcriber = Blocking()
+    library = library_with(transcriber)
+    first, second = await library.fetch(JID, "VOICE1"), await library.fetch(JID, "VOICE2")
+    with anyio.move_on_after(0.1):
+        await library.transcribe(first)
+    with pytest.raises(MediaError, match="already running"):
+        await library.transcribe(second)
+    transcriber.release.set()
+    assert (await library.transcribe(first)).text == "done"
+
+
+async def test_unsaved_transcript_has_no_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    from wacli_mcp import media
+
+    real_write = media._write_json  # pyright: ignore[reportPrivateUsage]
+
+    def failing_write(path: Path, data: dict[str, Any]) -> None:
+        if path.name.startswith(".transcript-"):
+            raise OSError("disk full")
+        real_write(path, data)
+
+    monkeypatch.setattr(media, "_write_json", failing_write)
+    items = items_of(await get_media(["VOICE1"], transcriber=FakeTranscriber(), transcribe=True))
+    assert items["VOICE1"]["transcript"] == "words from VOICE1"
+    assert "transcript_file" not in items["VOICE1"]
+
+
+async def test_attachment_names_never_clash_with_metadata(calls: Calls) -> None:
+    """A document named like the manifest or a transcript must not overwrite it or be deleted."""
+    first = items_of(await get_media(["media", "transcript-x"]))
+    assert Path(first["media"]["path"]).read_bytes() == b'{"kind": "document"}'
+    assert Path(first["transcript-x"]["path"]).is_file()
+    assert items_of(await get_media(["media", "transcript-x"])) == first
+    assert len(downloads(calls())) == 2
+
+
+async def test_accounts_never_share_a_path() -> None:
+    async def path_for(account: str) -> str:
+        async with Client(make_server(sync_before_read=False, account=account)) as client:
+            result = await client.call_tool("get_media", {"chat": JID, "message_ids": ["PHOTO1"]})
+        return items_of(result)["PHOTO1"]["path"]
+
+    assert await path_for("a") != await path_for("b")
+
+
+async def test_full_batch_of_transcripts_stays_valid_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Twenty long transcripts under a long media folder, at the default output limit."""
+    monkeypatch.setenv("WACLI_MCP_MEDIA_DIR", str(tmp_path / ("long-folder-name-" * 8) / "media"))
+    transcriber = FakeTranscriber(text="una palabra bastante larga " * 400)
+    result = await get_media([f"VOICE{n}" for n in range(20)], transcriber=transcriber, transcribe=True)
+    text = text_of(result)
+    assert len(text) <= Settings().max_output_chars
+    items = items_of(result)
+    assert len(items) == 20
+    assert all(item["transcript_truncated"] and Path(item["transcript_file"]).is_file() for item in items.values())
 
 
 async def test_disk_errors_become_item_errors(media_dir: Path) -> None:

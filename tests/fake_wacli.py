@@ -73,6 +73,9 @@ MEDIA = {
     "STICKER": ("sticker", "image/webp", "message-{id}.webp", b"RIFF fake webp"),
     "DOC": ("document", "application/pdf", "lease (final).pdf", b"%PDF-1.7 fake"),
     "CLIP": ("video", "video/mp4", "message-{id}.mp4", b"fake mp4"),
+    # Documents whose names look like the cache's own metadata files.
+    "media": ("document", "application/json", "message-{id}.json", b'{"kind": "document"}'),
+    "transcript": ("document", "application/json", "message-{id}.json", b'{"kind": "document"}'),
 }
 
 CHAT_NAMES = {
@@ -109,7 +112,10 @@ def main() -> None:
     command = " ".join(rest[:2])
 
     if rest[:1] == ["doctor"]:
-        reply({"authenticated": True, "connected": False})
+        # Each named account gets its own store, as in wacli.
+        account = argv[argv.index("--account") + 1] if "--account" in argv else "default"
+        store = argv[argv.index("--store") + 1] if "--store" in argv else f"/fake/stores/{account}"
+        reply({"authenticated": True, "connected": False, "store_dir": store})
     if rest[:1] == ["sync"]:
         error = os.environ.get("FAKE_WACLI_SYNC_ERROR")
         if error:
