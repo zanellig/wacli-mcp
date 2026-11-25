@@ -6,6 +6,7 @@ imports it on first use, so the server starts quickly and runs without it.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import os
@@ -20,9 +21,15 @@ from wacli_mcp.settings import Settings
 
 INSTALL_HINT = (
     "Transcription needs the optional faster-whisper dependencies. Reinstall wacli-mcp with the `transcribe` "
-    'extra, for example `uv tool install --python 3.13 "wacli-mcp[transcribe]"`, or `wacli-mcp[transcribe-cuda]` for an '
-    "NVIDIA GPU on Windows, then restart your agent. See the README's Transcription section."
+    'extra, for example `uv tool install --python 3.13 "wacli-mcp[transcribe]"`, or with '
+    "`wacli-mcp[transcribe-cuda]` for an NVIDIA GPU on Windows, then restart your agent. "
+    "See the README's Transcription section."
 )
+# Part of every transcript's cache key. Increase it when decoding or transcription changes enough
+# that transcripts saved by earlier versions should be redone.
+TRANSCRIPT_FORMAT = 1
+# Decoded audio is held in memory as 4-byte samples at 16 kHz, about 230 MB per hour.
+MAX_AUDIO_SECONDS = 60 * 60
 _REQUIRED_MODULES = ("faster_whisper", "av", "numpy")
 _SAMPLE_RATE = 16_000
 _GPU_ERROR_WORDS = ("cuda", "cublas", "cudnn", "gpu", ".dll", ".so")
@@ -46,7 +53,7 @@ class Transcriber(Protocol):
 
     @property
     def cache_tag(self) -> str:
-        """Identifies the model and language, so a cached transcript is reused only for the same setup."""
+        """Identifies the model, language and format, so a saved transcript is reused only for the same setup."""
         ...
 
     def unavailable_reason(self) -> str | None: ...
@@ -56,23 +63,36 @@ class Transcriber(Protocol):
     def transcribe(self, path: Path) -> Transcript: ...
 
 
-def decode_audio(path: Path) -> Any:
+def decode_audio(path: Path, max_seconds: float = MAX_AUDIO_SECONDS) -> Any:
     """Decode an audio or video file to 16 kHz mono float32 samples, the input Whisper expects.
 
     faster-whisper's own decoder passes an argument that PyAV 15 removed, so this calls PyAV directly.
+    Stops with an error once the audio passes `max_seconds`, before it can use much memory.
     """
     av: Any = importlib.import_module("av")
     np: Any = importlib.import_module("numpy")
     resampler = av.AudioResampler(format="s16", layout="mono", rate=_SAMPLE_RATE)
+    limit = int(max_seconds * _SAMPLE_RATE)
     chunks: list[Any] = []
+    total = 0
+
+    def keep(frames: Any) -> None:
+        nonlocal total
+        for out in frames:
+            samples = out.to_ndarray().reshape(-1)
+            total += len(samples)
+            if total > limit:
+                raise TranscriptionError(f"the recording is longer than {max_seconds / 60:g} minutes")
+            chunks.append(samples)
+
     with av.open(str(path)) as container:
         if not container.streams.audio:
             raise TranscriptionError("the file has no audio track")
         for frame in container.decode(container.streams.audio[0]):
             # Some voice notes carry timestamps the resampler rejects; it does not need them.
             frame.pts = None
-            chunks.extend(out.to_ndarray().reshape(-1) for out in resampler.resample(frame))
-        chunks.extend(out.to_ndarray().reshape(-1) for out in resampler.resample(None))
+            keep(resampler.resample(frame))
+        keep(resampler.resample(None))
     if not chunks:
         return np.zeros(0, dtype=np.float32)
     return np.concatenate(chunks).astype(np.float32) / 32768.0
@@ -119,8 +139,11 @@ class WhisperTranscriber:
 
     @property
     def cache_tag(self) -> str:
-        tag = f"{self._settings.transcribe_model}-{self._settings.transcribe_language or 'auto'}"
-        return re.sub(r"[^A-Za-z0-9.-]+", "-", tag)
+        model, language = self._settings.transcribe_model, self._settings.transcribe_language or "auto"
+        # Readable, plus a digest of the exact values: two model paths can look alike once shortened.
+        digest = hashlib.sha256(f"{model}|{language}|{TRANSCRIPT_FORMAT}".encode()).hexdigest()[:10]
+        readable = re.sub(r"[^A-Za-z0-9.-]+", "-", f"{Path(model).name}-{language}").strip("-")
+        return f"{readable}-{digest}"
 
     def unavailable_reason(self) -> str | None:
         if all(importlib.util.find_spec(name) is not None for name in _REQUIRED_MODULES):

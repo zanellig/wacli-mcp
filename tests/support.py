@@ -44,6 +44,7 @@ class FakeTranscriber:
 
     reason: str | None = None
     fail: str | None = None
+    text: str = ""
     calls: list[Path] = field(default_factory=list)
     cache_tag: str = "fake-auto"
 
@@ -57,4 +58,4 @@ class FakeTranscriber:
         self.calls.append(path)
         if self.fail:
             raise RuntimeError(self.fail)
-        return Transcript(f"words from {path.stem}", "es", 12.5, "fake", "cpu")
+        return Transcript(self.text or f"words from {path.stem}", "es", 12.5, "fake", "cpu")

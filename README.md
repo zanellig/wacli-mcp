@@ -127,12 +127,14 @@ All tools except `send_text` call wacli with `--read-only`. Results label messag
 Messages with an attachment have a `media_type` (`image`, `audio`, `video`, `sticker`, `document`). `get_media` takes the chat's JID and up to 20 message `id`s. For each message it:
 
 - downloads the file with `wacli media download --read-only` into `<media folder>/<chat>/<message id>/`. The file is named after the message id, with an extension that matches its type, such as `.jpg`, `.ogg`, `.mp4` or `.pdf`. Your agent opens it from there with its own file tools.
-- also returns JPEG and PNG photos up to 1 MB inline, so the model sees them without opening a file.
+- also returns JPEG and PNG photos up to 1 MB inline, so the model sees them without opening a file. One result shows at most 4 MB of photos inline; the rest are listed by path.
 - with `transcribe: true`, adds the text of voice notes, audio and video.
 
-A file that can't be downloaded gets an `error` on its own item and doesn't stop the others. Files and transcripts are saved, so asking for the same message again returns at once.
+A file that can't be downloaded or saved gets an `error` on its own item and doesn't stop the others. Files and transcripts are saved, so asking for the same message again returns at once. A saved copy is reused only for the same chat, message and wacli account.
 
-`list_messages` with `transcribe_audio: true` does the same for the voice notes it returns, up to the newest 20, so "read my chat with Ada, voice notes included" is one call.
+When transcripts would make a result longer than `WACLI_MCP_MAX_OUTPUT_CHARS`, the longest ones are shortened and marked `transcript_truncated`, with `transcript_file` pointing to the saved full text.
+
+`list_messages` with `transcribe_audio: true` does the same for the voice notes it returns, up to the newest 20, so "read my chat with Ada, voice notes included" is one call. Without the transcription extra, it still returns transcripts saved earlier and downloads nothing.
 
 The media folder is `wacli-mcp/media` in your user cache folder: `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `~/.cache` on Linux. `whatsapp_status` shows the exact path. Delete the folder to remove everything downloaded; wacli-mcp downloads files again when asked.
 
@@ -155,6 +157,8 @@ If `uv tool install` fails with "Access is denied" on Windows, a running agent s
 - On an NVIDIA GPU, a minute of audio takes a few seconds. A CPU takes several times longer. With `WACLI_MCP_TRANSCRIBE_DEVICE=auto`, wacli-mcp tries the GPU and falls back to the CPU if CUDA doesn't work. `whatsapp_status` shows the device in use, and the GPU error if there was one.
 - The model stays loaded until the server stops, holding about 2 GB of GPU or system memory.
 - Whisper detects each file's language. Set `WACLI_MCP_TRANSCRIBE_LANGUAGE`, for example to `es`, if it guesses wrong on short notes.
+- Recordings longer than an hour are not transcribed, to bound the memory the server uses.
+- One file is transcribed at a time. If a client stops waiting and asks again, the second request waits for the first transcription instead of starting another.
 - Transcripts are machine output: names and rare words can come out wrong.
 
 Codex stops a tool call after 60 seconds by default, and a first transcription can take longer while the model downloads. The transcription keeps running and saves its result, so asking again returns it. To avoid the timeout, raise the limit in `~/.codex/config.toml`:

@@ -4,19 +4,25 @@ import base64
 import json
 import math
 import struct
+import sys
+import threading
 import wave
 from pathlib import Path
 from typing import Any
 
+import anyio
+import anyio.to_thread
 import pytest
 from mcp.client import Client
 from mcp.types import CallToolResult, ImageContent, TextContent
 
-from wacli_mcp.media import extension_for
+from wacli_mcp.media import MediaLibrary, extension_for
 from wacli_mcp.settings import Settings
-from wacli_mcp.transcription import INSTALL_HINT, WhisperTranscriber, decode_audio
+from wacli_mcp.transcription import INSTALL_HINT, Transcript, TranscriptionError, WhisperTranscriber, decode_audio
+from wacli_mcp.wacli import Wacli
 
-from support import JID, Calls, FakeTranscriber, make_server, text_of
+from fake_wacli import JPEG
+from support import FAKE_WACLI, JID, Calls, FakeTranscriber, make_server, text_of
 
 pytestmark = pytest.mark.anyio
 
@@ -235,28 +241,51 @@ def test_whisper_reports_how_to_install(monkeypatch: pytest.MonkeyPatch) -> None
     assert status["available"] is False and status["how_to_enable"] == INSTALL_HINT
 
 
-def test_cache_tag_names_model_and_language() -> None:
-    assert WhisperTranscriber(Settings()).cache_tag == "large-v3-turbo-auto"
-    tagged = WhisperTranscriber(Settings(transcribe_model="C:/models/my whisper", transcribe_language="es"))
-    assert tagged.cache_tag == "C-models-my-whisper-es"
+def test_cache_tag_is_readable_and_exact() -> None:
+    def tag(**overrides: Any) -> str:
+        return WhisperTranscriber(Settings(**overrides)).cache_tag
+
+    assert tag().startswith("large-v3-turbo-auto-")
+    assert tag(transcribe_model="C:/models/my whisper", transcribe_language="es").startswith("my-whisper-es-")
+    # Model paths that shorten to the same readable name still get different tags.
+    assert tag(transcribe_model="C:/a/my whisper") != tag(transcribe_model="C:/b/my whisper")
+    assert tag(transcribe_language="es") != tag()
 
 
-def test_decode_audio_resamples_to_16k_mono(tmp_path: Path) -> None:
-    """Runs only where the `transcribe` extra is installed."""
-    pytest.importorskip("av")
-    pytest.importorskip("numpy")
-    path = tmp_path / "tone.wav"
+def write_tone(path: Path, seconds: float) -> Path:
     rate = 44_100
     with wave.open(str(path), "wb") as wav:
         wav.setnchannels(2)
         wav.setsampwidth(2)
         wav.setframerate(rate)
-        frames = (int(8000 * math.sin(2 * math.pi * 440 * n / rate)) for n in range(rate))
+        frames = (int(8000 * math.sin(2 * math.pi * 440 * n / rate)) for n in range(int(rate * seconds)))
         wav.writeframes(b"".join(struct.pack("<hh", sample, sample) for sample in frames))
-    audio = decode_audio(path)
+    return path
+
+
+def test_decode_audio_resamples_to_16k_mono(tmp_path: Path) -> None:
+    """Runs only where the `transcribe` extra is installed, as in the transcription CI job."""
+    pytest.importorskip("av")
+    pytest.importorskip("numpy")
+    audio = decode_audio(write_tone(tmp_path / "tone.wav", 1.0))
     assert str(audio.dtype) == "float32"
     assert abs(len(audio) - 16_000) < 200
     assert 0.2 < float(abs(audio).max()) < 0.3
+
+
+def test_decode_audio_refuses_long_recordings(tmp_path: Path) -> None:
+    pytest.importorskip("av")
+    pytest.importorskip("numpy")
+    with pytest.raises(TranscriptionError, match="longer than"):
+        decode_audio(write_tone(tmp_path / "tone.wav", 2.0), max_seconds=1.0)
+
+
+def test_transcription_stack_imports() -> None:
+    """Catches an extra whose native libraries install but don't load."""
+    faster_whisper = pytest.importorskip("faster_whisper")
+    ctranslate2 = pytest.importorskip("ctranslate2")
+    assert ctranslate2.get_cuda_device_count() >= 0
+    assert callable(faster_whisper.WhisperModel)
 
 
 @pytest.mark.parametrize(
@@ -303,3 +332,113 @@ def test_whisper_falls_back_to_cpu_only_for_gpu_failures(
     assert transcript.text == "hola" and transcript.device == "cpu" and transcript.duration_seconds == 3.0
     assert created == ["cuda/float16", "cpu/int8"]
     assert "cublas64_12.dll" in transcriber.status()["gpu_error"]
+
+
+# Cache identity, failures and limits
+
+
+async def test_ids_that_look_alike_on_disk_stay_separate(calls: Calls) -> None:
+    items = items_of(await get_media(["PHOTO.1", "PHOTO_1"]))
+    assert items["PHOTO.1"]["path"] != items["PHOTO_1"]["path"]
+    assert len(downloads(calls())) == 2
+
+
+async def test_cache_is_scoped_to_the_wacli_account(calls: Calls) -> None:
+    async def fetch(account: str, transcriber: FakeTranscriber) -> dict[str, Any]:
+        server = make_server(sync_before_read=False, account=account, transcriber=transcriber)
+        async with Client(server) as client:
+            result = await client.call_tool("get_media", {"chat": JID, "message_ids": ["VOICE1"], "transcribe": True})
+        return items_of(result)["VOICE1"]
+
+    first, second = FakeTranscriber(text="from account a"), FakeTranscriber(text="from account b")
+    assert (await fetch("a", first))["transcript"] == "from account a"
+    assert (await fetch("b", second))["transcript"] == "from account b", "account b must not see a's transcript"
+    assert len(downloads(calls())) == 2
+    assert (await fetch("b", second))["transcript"] == "from account b"
+    assert len(downloads(calls())) == 2 and len(second.calls) == 1
+
+
+async def test_retry_waits_for_the_transcription_already_running() -> None:
+    """A client that times out and asks again must not start a second transcription of the same file."""
+    started, release = threading.Event(), threading.Event()
+
+    class Blocking(FakeTranscriber):
+        def transcribe(self, path: Path) -> Transcript:
+            self.calls.append(path)
+            started.set()
+            release.wait(10)
+            return Transcript("done", "es", 1.0, "fake", "cpu")
+
+    settings = Settings()
+    transcriber = Blocking()
+    library = MediaLibrary(settings, Wacli(settings, command=(sys.executable, str(FAKE_WACLI))), transcriber)
+    media = await library.fetch(JID, "VOICE1")
+    results: list[Transcript] = []
+
+    async with anyio.create_task_group() as tg:
+        first_call = anyio.CancelScope()
+
+        async def first() -> None:
+            with first_call:
+                await library.transcribe(media)
+
+        async def retry() -> None:
+            results.append(await library.transcribe(media))
+
+        tg.start_soon(first)
+        await anyio.to_thread.run_sync(started.wait)
+        first_call.cancel()  # the client gave up; its worker keeps running
+        tg.start_soon(retry)
+        await anyio.sleep(0.2)
+        release.set()
+
+    assert [r.text for r in results] == ["done"]
+    assert len(transcriber.calls) == 1
+
+
+async def test_disk_errors_become_item_errors(media_dir: Path) -> None:
+    media_dir.parent.mkdir(parents=True, exist_ok=True)
+    media_dir.write_text("not a folder", encoding="utf-8")
+    items = items_of(await get_media(["PHOTO1", "VOICE1"]))
+    assert all("could not create the media folder" in item["error"] for item in items.values())
+
+
+async def test_long_transcripts_are_shortened_not_the_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WACLI_MCP_MAX_OUTPUT_CHARS", "20000")
+    transcriber = FakeTranscriber(text="palabra " * 4000)
+    result = await get_media(["VOICE1", "VOICE2", "VOICE3"], transcriber=transcriber, transcribe=True)
+    assert len(text_of(result)) <= 20_000
+    items = items_of(result)  # still valid JSON, with every item present
+    assert set(items) == {"VOICE1", "VOICE2", "VOICE3"}
+    for item in items.values():
+        assert item["transcript_truncated"] is True and item["transcript"].endswith("[...]")
+        saved = json.loads(Path(item["transcript_file"]).read_text(encoding="utf-8"))
+        assert saved["text"] == transcriber.text
+
+
+async def test_inline_photos_share_one_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WACLI_MCP_INLINE_IMAGE_MAX_BYTES", str(len(JPEG)))  # four photos fit in the total
+    result = await get_media([f"PHOTO{n}" for n in range(1, 6)])
+    payload = json.loads(text_of(result))
+    shown = [item["id"] for item in payload["items"] if item.get("shown_inline")]
+    assert shown == ["PHOTO1", "PHOTO2", "PHOTO3", "PHOTO4"]
+    assert "not shown inline" in payload["inline_note"]
+    assert sum(isinstance(block, ImageContent) for block in result.content) == 4
+
+
+async def test_saved_transcripts_work_without_the_extra(monkeypatch: pytest.MonkeyPatch, calls: Calls) -> None:
+    await get_media(["VOICE0"], transcriber=FakeTranscriber(), transcribe=True)
+    missing = FakeTranscriber(reason=INSTALL_HINT)
+
+    items = items_of(await get_media(["VOICE0"], transcriber=missing, transcribe=True))
+    assert items["VOICE0"]["transcript"] == "words from VOICE0"
+
+    monkeypatch.setenv("FAKE_WACLI_VOICE_NOTES", "2")
+    async with Client(make_server(sync_before_read=False, transcriber=missing)) as client:
+        payload = json.loads(text_of(await client.call_tool("list_messages", {"chat": JID, "transcribe_audio": True})))
+    messages = {m["id"]: m for m in payload["result"]["messages"]}
+    assert messages["VOICE0"]["transcript"] == "words from VOICE0"
+    assert "transcript" not in messages["VOICE1"]
+    assert payload["transcription_unavailable"] == INSTALL_HINT
+    assert len(downloads(calls())) == 1, "VOICE1 has no saved transcript and can't be transcribed: no download"
+    assert missing.calls == []
