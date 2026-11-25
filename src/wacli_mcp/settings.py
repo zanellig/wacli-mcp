@@ -99,6 +99,18 @@ class Settings(BaseSettings):
         default="auto",
         description="`auto` uses an NVIDIA GPU when one works and falls back to the CPU.",
     )
+    transcribe_shared: bool = Field(
+        default=True,
+        description=(
+            "Transcribe in one background service that every wacli-mcp session shares, so the model is "
+            "loaded once per machine instead of once per agent session. `false` loads it in each session."
+        ),
+    )
+    transcribe_idle_minutes: float = Field(
+        default=10,
+        gt=0,
+        description="The shared transcription service exits after this long without work, freeing GPU memory.",
+    )
     transcribe_language: str | None = Field(
         default=None,
         description="Language code such as `es` or `en`. Unset: Whisper detects the language of each file.",

@@ -165,11 +165,15 @@ class WhisperTranscriber:
         return info
 
     def transcribe(self, path: Path) -> Transcript:
+        return self.transcribe_in(path, self._settings.transcribe_language)
+
+    def transcribe_in(self, path: Path, language: str | None) -> Transcript:
+        """Transcribe with a language other than the configured one, without loading another model."""
         with self._lock:
             audio = decode_audio(path)
             self._ensure_model()
             try:
-                return self._run(audio)
+                return self._run(audio, language)
             except RuntimeError as exc:
                 # CUDA problems such as a missing cuBLAS DLL often surface only once inference starts.
                 # Other errors belong to this file and must not move every later file to the CPU.
@@ -178,7 +182,7 @@ class WhisperTranscriber:
                     raise
                 self._gpu_error = str(exc)
                 self._create("cpu")
-                return self._run(audio)
+                return self._run(audio, language)
 
     def _ensure_model(self) -> None:
         if self._model is not None:
@@ -207,12 +211,12 @@ class WhisperTranscriber:
         )
         self._device = device
 
-    def _run(self, audio: Any) -> Transcript:
+    def _run(self, audio: Any, language: str | None) -> Transcript:
         device = self._device or "cpu"
         if not len(audio):
             return Transcript("", None, 0.0, self._settings.transcribe_model, device)
         # `vad_filter` skips silence, where Whisper tends to invent text.
-        segments, info = self._model.transcribe(audio, language=self._settings.transcribe_language, vad_filter=True)
+        segments, info = self._model.transcribe(audio, language=language, vad_filter=True)
         text = " ".join(segment.text.strip() for segment in segments).strip()
         return Transcript(
             text=text,

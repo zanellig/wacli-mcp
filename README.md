@@ -30,7 +30,7 @@ Claude Code / Codex  --stdio-->  wacli-mcp  --runs-->  wacli  --linked device-->
 - Before a read, wacli-mcp runs a short `wacli sync --once` to pick up new messages, at most once a minute. The sync connects as your linked device and updates the local copy, like any linked device coming online: it can send delivery receipts (two grey ticks), never read receipts. If you run `wacli sync --follow` yourself, that process keeps the copy current and the per-read sync is skipped.
 - `get_media` downloads photos, voice notes, videos and documents into a cache folder and returns their paths. It can transcribe voice notes and videos on your computer with [faster-whisper](https://github.com/SYSTRAN/faster-whisper); see [Attachments and voice notes](#attachments-and-voice-notes).
 - `send_text` sends to a chat JID or a phone number. By default your agent and its client decide when to send, as with any other tool. You can make the server ask you itself before every send instead; see [Sending](#sending).
-- The server talks to the agent over stdio only. It opens no network port.
+- The server talks to the agent over stdio only. It opens no network port. The shared transcription service talks to wacli-mcp sessions over a local named pipe (Windows) or Unix socket, authenticated with a key only your user can read.
 
 ## Requirements
 
@@ -155,10 +155,11 @@ If `uv tool install` fails with "Access is denied" on Windows, a running agent s
 
 - The default model is `large-v3-turbo`. The first transcription downloads it, about 1.6 GB, into the Hugging Face cache.
 - On an NVIDIA GPU, a minute of audio takes a few seconds. A CPU takes several times longer. With `WACLI_MCP_TRANSCRIBE_DEVICE=auto`, wacli-mcp tries the GPU and falls back to the CPU if CUDA doesn't work. `whatsapp_status` shows the device in use, and the GPU error if there was one.
-- The model stays loaded until the server stops, holding about 2 GB of GPU or system memory.
+- Every agent session runs its own wacli-mcp, so the model doesn't live in them. The first session that transcribes starts one background transcription service, and every session on the machine sends it work. It holds one model, about 2 GB of GPU or system memory, and exits after `WACLI_MCP_TRANSCRIBE_IDLE_MINUTES` (10) without work, which frees that memory. The next transcription starts it again, which takes a few seconds while the model loads.
+- If the service can't start, a session transcribes in its own process instead, and `whatsapp_status` says why. `WACLI_MCP_TRANSCRIBE_SHARED=false` always works that way.
 - Whisper detects each file's language. Set `WACLI_MCP_TRANSCRIBE_LANGUAGE`, for example to `es`, if it guesses wrong on short notes.
 - Recordings longer than an hour are not transcribed, to bound the memory the server uses.
-- One file is transcribed at a time, and up to 8 files can wait their turn. A transcription finishes and saves its text even if the client stops waiting, and asking again for the same file joins it instead of starting another.
+- One file is transcribed at a time, and up to 8 files per session can wait their turn. A transcription finishes and saves its text even if the client stops waiting. Asking again for the same file, from the same session or another one, joins it instead of starting another.
 - Transcripts are machine output: names and rare words can come out wrong.
 
 Codex stops a tool call after 60 seconds by default, and a first transcription can take longer while the model downloads. The transcription keeps running and saves its result, so asking again returns it. To avoid the timeout, raise the limit in `~/.codex/config.toml`:
@@ -233,6 +234,8 @@ All settings are environment variables.
 | `WACLI_MCP_TRANSCRIBE_MODEL` | `large-v3-turbo` | faster-whisper model name, such as `small` for slower CPUs, or a local model folder. |
 | `WACLI_MCP_TRANSCRIBE_DEVICE` | `auto` | `auto`, `cuda` or `cpu`. `auto` uses an NVIDIA GPU when it works. |
 | `WACLI_MCP_TRANSCRIBE_LANGUAGE` | unset | Language code for every file, such as `es`. Unset: detected per file. |
+| `WACLI_MCP_TRANSCRIBE_SHARED` | `true` | Transcribe in one background service shared by all sessions, so the model is loaded once. `false` loads it in each session's own process. |
+| `WACLI_MCP_TRANSCRIBE_IDLE_MINUTES` | `10` | The shared service exits after this long without work, freeing GPU memory. The session that starts the service sets it. |
 
 ## Security
 
@@ -243,7 +246,7 @@ What wacli-mcp does about it:
 - Results label message content as untrusted, and the server's instructions tell the agent that a message asking it to send or reveal something is content to report, not a request from you.
 - In `server` confirmation mode, every send needs your answer to a prompt the server requests itself, showing the real recipient and the full text with hidden characters made visible. Each answer sends at most one message.
 - Read tools run wacli with `--read-only`. `get_media` saves files only inside its media folder, and checks that wacli wrote the file where it was told to.
-- Transcription runs on your computer. Voice notes are not sent to a transcription service.
+- Transcription runs on your computer. Voice notes are not sent to a transcription service. The shared service accepts work only from processes that can read its key file, `transcriber.key` in the media folder's `.transcriber` folder, which is private to your user.
 - No network listener, and link previews are off by default.
 
 What it does not protect against:
