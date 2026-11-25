@@ -1,6 +1,6 @@
 {
   "name": "wacli-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Search WhatsApp chats and messages and send replies through your paired wacli account.",
   "author": {
     "name": "zanellig"

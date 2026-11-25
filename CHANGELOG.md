@@ -6,6 +6,8 @@ Every release has a page with these notes on the [releases page](https://github.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-25
+
 ### Added
 
 - An npm package, so `npx -y wacli-mcp` runs the server. It starts the PyPI release with the same version through uv. If uv is not on `PATH`, it downloads a pinned uv release from GitHub, checks its SHA-256, and caches it. `WACLI_MCP_EXTRAS` picks extras such as `transcribe`.
@@ -35,5 +37,6 @@ wacli is not an official WhatsApp client, and WhatsApp can block an account link
 - Installation from PyPI with `uv tool install wacli-mcp` or `uvx wacli-mcp`, an [MCP Registry](https://registry.modelcontextprotocol.io/) entry named `io.github.zanellig/wacli-mcp`, and plugins for Claude Code and Codex.
 - A [security policy](https://github.com/zanellig/wacli-mcp/security/policy) that lists what is in and out of scope for a report.
 
-[Unreleased]: https://github.com/zanellig/wacli-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/zanellig/wacli-mcp/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/zanellig/wacli-mcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/zanellig/wacli-mcp/releases/tag/v0.1.0
