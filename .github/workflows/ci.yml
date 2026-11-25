@@ -45,3 +45,18 @@ jobs:
       # Fails, rather than skipping tests, if a native library installed but does not load.
       - run: uv run --no-sync python -c "import av, ctranslate2, faster_whisper, numpy"
       - run: uv run --no-sync pytest tests/test_media.py
+
+  npm:
+    name: ${{ matrix.os }} / npm package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 18
+      # Hides any uv on PATH, so the launcher downloads the pinned uv and runs the server from this checkout.
+      - run: node npm/test/smoke.mjs --without-uv
