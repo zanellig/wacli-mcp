@@ -20,6 +20,7 @@ In scope:
 - A confirmation prompt that shows something different from what is sent, for example through hidden characters or a crafted chat name.
 - A `send_text` call that reaches a recipient other than the `to` it was given, apart from WhatsApp's own identifier routing noted below.
 - Argument injection into the wacli command line.
+- Another user on the same computer getting the shared transcription service to transcribe a file, or reading its results.
 - `get_media` writing a file outside its media folder, or returning a file from another chat or message than the one requested.
 - Read tools that send messages, mark messages read, or change account or chat state. The pre-read sync updates the local copy and can send delivery receipts, as any linked device does; with `WACLI_MCP_READ_ONLY=true` it does not run at all.
 

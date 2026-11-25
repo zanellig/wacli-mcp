@@ -25,6 +25,7 @@ from wacli_mcp.confirmation import ConfirmationLedger, confirmation_key, confirm
 from wacli_mcp.media import MediaError, MediaLibrary
 from wacli_mcp.settings import Settings
 from wacli_mcp.transcription import Transcriber, WhisperTranscriber
+from wacli_mcp.transcription_service import SharedTranscriber
 from wacli_mcp.wacli import Wacli, WacliError
 
 UNTRUSTED_NOTICE = (
@@ -129,7 +130,8 @@ def build_server(
     """Create the MCP server. Pass `wacli` or `transcriber` to substitute them in tests."""
     settings = settings or Settings()
     wacli = wacli or Wacli(settings)
-    transcriber = transcriber or WhisperTranscriber(settings)
+    if transcriber is None:
+        transcriber = SharedTranscriber(settings) if settings.transcribe_shared else WhisperTranscriber(settings)
     library = MediaLibrary(settings, wacli, transcriber)
     attachments = Attachments(library, settings)
     ledger = ConfirmationLedger()
