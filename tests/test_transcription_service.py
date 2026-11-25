@@ -150,3 +150,24 @@ def test_a_service_from_another_version_is_not_used(sessions: list[SharedTranscr
     with patch("wacli_mcp.transcription_service.PROTOCOL", PROTOCOL + 1):
         assert newer.transcribe(audio(tmp_path, "two")).text == "local words"
         assert "protocol" in newer.status()["service_error"]
+
+
+def test_a_service_exiting_during_the_handshake_counts_as_not_running(
+    sessions: list[SharedTranscriber], media_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An idle service can exit just as a session connects, which ends the handshake with EOFError."""
+    client = session(sessions)
+    client.transcribe(audio(tmp_path, "one"))
+    real_connect = ServiceAddress.connect
+    drops = [1]
+
+    def dropped_once(self: ServiceAddress) -> Any:
+        if drops:
+            drops.pop()
+            raise EOFError
+        return real_connect(self)
+
+    monkeypatch.setattr(ServiceAddress, "connect", dropped_once)
+    assert client.transcribe(audio(tmp_path, "two")).text == "shared words from two"
+    monkeypatch.setattr(ServiceAddress, "connect", lambda self: (_ for _ in ()).throw(EOFError()))
+    assert client.status()["service"].startswith("not running")

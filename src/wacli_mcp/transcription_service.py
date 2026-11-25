@@ -40,8 +40,11 @@ from wacli_mcp.transcription import Transcriber, Transcript, TranscriptionError,
 PROTOCOL = 1
 _MAX_MESSAGE_BYTES = 1_000_000
 _MAX_LOG_BYTES = 1_000_000
-# Errors that mean nothing is listening yet: no pipe, no socket file, or a stale socket file.
-_NOT_RUNNING = (FileNotFoundError, ConnectionRefusedError)
+# Errors that mean no service is there to answer: no pipe, no socket file, a stale socket file, or a
+# service that exited (idle) while the connection was being set up, which ends the handshake early.
+_NOT_RUNNING = (FileNotFoundError, ConnectionError, EOFError)
+# How long a new service waits for one that is exiting to let go of the lock or the pipe.
+_HANDOVER_SECONDS = 2.0
 
 
 class ServiceUnavailable(Exception):
@@ -253,11 +256,17 @@ def _first_instance(where: ServiceAddress) -> Iterator[bool]:
     import fcntl
 
     with open(where.folder / "transcriber.lock", "a+") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            yield False
-            return
+        deadline = time.monotonic() + _HANDOVER_SECONDS
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                # Held by a running service, or by one still exiting after its idle timeout.
+                if time.monotonic() > deadline:
+                    yield False
+                    return
+                time.sleep(0.1)
         yield True
 
 
@@ -271,10 +280,16 @@ def serve(folder: Path, idle_seconds: float, backend_factory: BackendFactory = w
         if where.family == "AF_UNIX":
             # Safe while holding the lock: no other service is listening on it.
             Path(where.address).unlink(missing_ok=True)
-        try:
-            listener = Listener(where.address, family=where.family, authkey=key)
-        except OSError:
-            return 0  # another service already owns the pipe
+        deadline = time.monotonic() + _HANDOVER_SECONDS
+        while True:
+            try:
+                listener = Listener(where.address, family=where.family, authkey=key)
+                break
+            except OSError:
+                # Another service owns the pipe; wait briefly in case it is exiting.
+                if time.monotonic() > deadline:
+                    return 0
+                time.sleep(0.1)
         if where.family == "AF_UNIX":
             os.chmod(where.address, 0o600)
         service = _Service(idle_seconds, backend_factory)
