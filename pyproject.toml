@@ -1,6 +1,6 @@
 [project]
 name = "wacli-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "MCP server that lets AI agents read your WhatsApp and send replies you confirm, through the wacli CLI."
 readme = "README.md"
 license = "MIT"

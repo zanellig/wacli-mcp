@@ -7,12 +7,12 @@
     "url": "https://github.com/zanellig/wacli-mcp",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "wacli-mcp",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -21,7 +21,7 @@
     {
       "registryType": "npm",
       "identifier": "wacli-mcp",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

@@ -85,7 +85,8 @@ jobs:
           registry-url: https://registry.npmjs.org
       # Trusted publishing (OIDC) needs npm 11.5.1 or later; npm adds provenance on its own.
       - run: npm --version
-      - run: npm publish npm-dist/*.tgz --access public
+      # The ./ keeps npm from reading "npm-dist/<file>" as a GitHub repository.
+      - run: npm publish ./npm-dist/*.tgz --access public
 
   publish-registry:
     needs: [publish, publish-npm]
