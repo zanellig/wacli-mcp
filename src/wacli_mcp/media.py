@@ -183,9 +183,14 @@ class MediaLibrary:
         self._jobs: dict[Path, _Job] = {}
 
     async def resolve_store(self) -> str:
-        """The store folder wacli uses right now, which `WACLI_STORE_DIR` or a default account can select."""
+        """The store folder wacli uses right now, which `WACLI_STORE_DIR` or a default account can select.
+
+        Returned as the real path, with links resolved and the case kept: the same string is passed to
+        wacli as `--store` and keys the cache. Case is kept because Windows folders can be case-sensitive,
+        so `Team` and `team` may be different stores.
+        """
         if self.settings.store and not self.settings.account:
-            return os.path.abspath(self.settings.store)
+            return os.path.realpath(self.settings.store)
         try:
             doctor = await self.wacli.run(["doctor"])
         except WacliError as exc:
@@ -193,15 +198,14 @@ class MediaLibrary:
         store = doctor.get("store_dir") if isinstance(doctor, dict) else None
         if not isinstance(store, str) or not store:
             raise MediaError("wacli did not report its store folder")
-        return os.path.abspath(store)
+        return os.path.realpath(store)
 
     def _folder(self, store: str, chat_jid: str, message_id: str) -> tuple[Path, dict[str, Any]]:
-        key = os.path.normcase(store)
-        store_root = (self.root / f"store-{hashlib.sha256(key.encode()).hexdigest()[:12]}").resolve()
+        store_root = (self.root / f"store-{hashlib.sha256(store.encode()).hexdigest()[:12]}").resolve()
         folder = (store_root / _entry_name(chat_jid) / _entry_name(message_id)).resolve()
         if folder.parent.parent != store_root:
             raise MediaError("invalid chat or message id")
-        return folder, {"chat_jid": chat_jid, "message_id": message_id, "store_dir": key}
+        return folder, {"chat_jid": chat_jid, "message_id": message_id, "store_dir": store}
 
     def saved(self, store: str, chat_jid: str, message_id: str) -> MediaFile | None:
         """The attachment downloaded earlier for exactly this message and wacli store, if any."""

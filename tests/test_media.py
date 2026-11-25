@@ -531,7 +531,7 @@ async def test_one_server_follows_a_change_of_default_account(monkeypatch: pytes
         assert await path_as("a") == path_a
 
     pinned = downloads(calls())
-    stores = [os.path.abspath(f"/fake/stores/{account}") for account in ("a", "b")]
+    stores = [os.path.realpath(f"/fake/stores/{account}") for account in ("a", "b")]
     assert [argv[argv.index("--store") + 1] for argv in pinned] == stores
     assert all("--account" not in argv for argv in pinned)
 
@@ -541,7 +541,7 @@ async def test_transcribed_listing_reads_one_store(monkeypatch: pytest.MonkeyPat
     async with Client(make_server(sync_before_read=False, transcriber=FakeTranscriber())) as client:
         await client.call_tool("list_messages", {"chat": JID, "transcribe_audio": True})
     reads = [argv for argv in calls() if "messages" in argv or "download" in argv]
-    assert [argv[argv.index("--store") + 1] for argv in reads] == [os.path.abspath("/fake/stores/default")] * 2
+    assert [argv[argv.index("--store") + 1] for argv in reads] == [os.path.realpath("/fake/stores/default")] * 2
 
 
 def test_fitting_never_fails_where_a_smaller_limit_fit() -> None:
@@ -614,3 +614,14 @@ def test_fitting_keeps_short_transcripts_whole_when_that_fits() -> None:
     assert fit_transcripts(payload, items, limit)
     assert len(to_json(payload)) <= limit
     assert all(item["transcript"] == "x" * 25 for item in items[:19])
+
+
+def test_store_paths_that_differ_only_in_case_stay_separate() -> None:
+    """Windows folders can be case-sensitive, so `Team` and `team` may be two different stores."""
+    library = library_with(FakeTranscriber())
+    folder = library._folder  # pyright: ignore[reportPrivateUsage]
+    (team, team_identity), (lower, lower_identity) = (
+        folder(store, JID, "PHOTO1") for store in ("C:/Stores/Team", "C:/Stores/team")
+    )
+    assert team != lower
+    assert team_identity["store_dir"] != lower_identity["store_dir"]
