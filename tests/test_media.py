@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import os
 import struct
 import sys
 import threading
@@ -16,6 +17,7 @@ import pytest
 from mcp.client import Client
 from mcp.types import CallToolResult, ImageContent, TextContent
 
+from wacli_mcp.attachments import fit_transcripts, to_json
 from wacli_mcp.media import MediaError, MediaLibrary, extension_for
 from wacli_mcp.settings import Settings
 from wacli_mcp.transcription import INSTALL_HINT, Transcript, TranscriptionError, WhisperTranscriber, decode_audio
@@ -385,7 +387,7 @@ async def test_retries_join_the_transcription_already_running() -> None:
     """Clients that time out and ask again must not start more transcriptions or more threads."""
     transcriber = Blocking()
     library = library_with(transcriber)
-    media = await library.fetch(JID, "VOICE1")
+    media = await library.fetch(await library.resolve_store(), JID, "VOICE1")
     results: list[Transcript] = []
 
     async with anyio.create_task_group() as tg:
@@ -411,7 +413,8 @@ async def test_too_many_running_transcriptions_is_an_error(monkeypatch: pytest.M
     monkeypatch.setattr("wacli_mcp.media.MAX_TRANSCRIPTION_JOBS", 1)
     transcriber = Blocking()
     library = library_with(transcriber)
-    first, second = await library.fetch(JID, "VOICE1"), await library.fetch(JID, "VOICE2")
+    store = await library.resolve_store()
+    first, second = await library.fetch(store, JID, "VOICE1"), await library.fetch(store, JID, "VOICE2")
     with anyio.move_on_after(0.1):
         await library.transcribe(first)
     with pytest.raises(MediaError, match="already running"):
@@ -512,3 +515,102 @@ async def test_saved_transcripts_work_without_the_extra(monkeypatch: pytest.Monk
     assert payload["transcription_unavailable"] == INSTALL_HINT
     assert len(downloads(calls())) == 1, "VOICE1 has no saved transcript and can't be transcribed: no download"
     assert missing.calls == []
+
+
+async def test_one_server_follows_a_change_of_default_account(monkeypatch: pytest.MonkeyPatch, calls: Calls) -> None:
+    """wacli resolves its default account on every run; the cache must follow it, not the first answer."""
+    async with Client(make_server(sync_before_read=False)) as client:
+
+        async def path_as(account: str) -> str:
+            monkeypatch.setenv("FAKE_WACLI_DEFAULT_ACCOUNT", account)
+            result = await client.call_tool("get_media", {"chat": JID, "message_ids": ["PHOTO1"]})
+            return items_of(result)["PHOTO1"]["path"]
+
+        path_a, path_b = await path_as("a"), await path_as("b")
+        assert path_a != path_b
+        assert await path_as("a") == path_a
+
+    pinned = downloads(calls())
+    stores = [os.path.abspath(f"/fake/stores/{account}") for account in ("a", "b")]
+    assert [argv[argv.index("--store") + 1] for argv in pinned] == stores
+    assert all("--account" not in argv for argv in pinned)
+
+
+async def test_transcribed_listing_reads_one_store(monkeypatch: pytest.MonkeyPatch, calls: Calls) -> None:
+    monkeypatch.setenv("FAKE_WACLI_VOICE_NOTES", "1")
+    async with Client(make_server(sync_before_read=False, transcriber=FakeTranscriber())) as client:
+        await client.call_tool("list_messages", {"chat": JID, "transcribe_audio": True})
+    reads = [argv for argv in calls() if "messages" in argv or "download" in argv]
+    assert [argv[argv.index("--store") + 1] for argv in reads] == [os.path.abspath("/fake/stores/default")] * 2
+
+
+def test_fitting_never_fails_where_a_smaller_limit_fit() -> None:
+    """A transcript made whole loses its mark and flag, so a result can shrink as the cap grows.
+
+    Fitting must still be monotonic: if a result fits under one limit, it fits under every larger one.
+    """
+    lengths = [8, 30, 31, 70, 75, 140, 400, 1200]
+
+    def fitted(limit: int) -> bool:
+        entries = [{"id": f"M{n}", "transcript": "ab cd " * (length // 6 + 1)} for n, length in enumerate(lengths)]
+        payload = {"notice": "untrusted", "items": entries}
+        fits = fit_transcripts(payload, entries, limit)
+        assert fits == (len(to_json(payload)) <= limit)
+        return fits
+
+    outcomes = [fitted(limit) for limit in range(200, 2_400, 3)]
+    first = outcomes.index(True)
+    assert all(outcomes[first:]), [200 + 3 * n for n, fits in enumerate(outcomes) if n > first and not fits][:5]
+
+
+async def test_result_too_large_without_transcripts_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WACLI_MCP_MAX_OUTPUT_CHARS", "1500")
+    result = await get_media([f"VOICE{n}" for n in range(20)], transcriber=FakeTranscriber(), transcribe=True)
+    assert result.is_error
+    assert "fewer message_ids" in text_of(result)
+
+
+def test_folder_names_never_meet() -> None:
+    from wacli_mcp.media import _entry_name, _file_stem  # pyright: ignore[reportPrivateUsage]
+
+    assert _entry_name("3EB0C5A1F2") == "3EB0C5A1F2"
+    generated = _entry_name("3eb0c5a1f2")
+    assert generated.startswith("~") and generated.lower() != "3eb0c5a1f2"
+    # A plain uppercase id can't spell a generated name: plain names never contain `~`.
+    assert _entry_name(generated.upper().lstrip("~")) == generated.upper().lstrip("~")
+    assert _entry_name("CON").startswith("~") and _entry_name("lpt1").startswith("~")
+    assert _file_stem("CON") == "_CON" and _file_stem("A.B") == "A_B"
+
+
+async def test_failed_thread_start_releases_the_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    library = library_with(FakeTranscriber())
+    media = await library.fetch(await library.resolve_store(), JID, "VOICE1")
+
+    def refuse(self: threading.Thread) -> None:
+        raise RuntimeError("can't start new thread")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(threading.Thread, "start", refuse)
+        with pytest.raises(MediaError, match="could not start transcribing"):
+            await library.transcribe(media)
+    assert (await library.transcribe(media)).text == "words from VOICE1"
+
+
+def test_fitting_keeps_short_transcripts_whole_when_that_fits() -> None:
+    """Shortening a short transcript makes it longer (mark plus flag), so the search must not get stuck there.
+
+    Nineteen 25-character transcripts and one long one: only caps that keep the short ones whole fit.
+    """
+
+    def entries() -> list[dict[str, Any]]:
+        return [{"id": f"S{n}", "transcript": "x" * 25} for n in range(19)] + [{"id": "LONG", "transcript": "y" * 5000}]
+
+    expected = entries()
+    expected[-1].update(transcript="y" * 30 + " [...]", transcript_truncated=True)
+    limit = len(to_json({"items": expected}))
+
+    items = entries()
+    payload = {"items": items}
+    assert fit_transcripts(payload, items, limit)
+    assert len(to_json(payload)) <= limit
+    assert all(item["transcript"] == "x" * 25 for item in items[:19])

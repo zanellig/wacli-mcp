@@ -1513,7 +1513,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anyio", specifier = ">=4.5" },
+    { name = "anyio", specifier = ">=4.11" },
     { name = "av", marker = "extra == 'transcribe'", specifier = ">=12" },
     { name = "faster-whisper", marker = "extra == 'transcribe'", specifier = ">=1.1" },
     { name = "mcp", specifier = ">=2.3,<3" },

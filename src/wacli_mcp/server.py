@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, StrictBool
 from wacli_mcp import __version__
 from wacli_mcp.attachments import MAX_PER_CALL, Attachments, fit_transcripts, to_json
 from wacli_mcp.confirmation import ConfirmationLedger, confirmation_key, confirmation_message
-from wacli_mcp.media import MediaLibrary
+from wacli_mcp.media import MediaError, MediaLibrary
 from wacli_mcp.settings import Settings
 from wacli_mcp.transcription import Transcriber, WhisperTranscriber
 from wacli_mcp.wacli import Wacli, WacliError
@@ -150,10 +150,10 @@ def build_server(
     async def read(args: list[str], *, compact: bool = False) -> str:
         return render(await read_payload(args, compact=compact))
 
-    async def read_payload(args: list[str], *, compact: bool = False) -> dict[str, Any]:
+    async def read_payload(args: list[str], *, compact: bool = False, store: str | None = None) -> dict[str, Any]:
         state = await wacli.refresh()
         try:
-            data = await wacli.run(args)
+            data = await wacli.run(args, store=store)
         except WacliError as exc:
             raise ToolError(str(exc)) from exc
         payload: dict[str, Any] = {"notice": UNTRUSTED_NOTICE}
@@ -244,12 +244,23 @@ def build_server(
             args += ["--after", after]
         if from_them_only:
             args.append("--from-them")
-        payload = await read_payload(args, compact=True)
+        if not transcribe_audio:
+            return await read(args, compact=True)
+        # Read the messages and their voice notes from one store, even if wacli's default account changes.
+        try:
+            store = await library.resolve_store()
+        except MediaError as exc:
+            raise ToolError(str(exc)) from exc
+        payload = await read_payload(args, compact=True, store=store)
         result = payload.get("result")
         messages = result.get("messages") if isinstance(result, dict) else None
-        if transcribe_audio and isinstance(messages, list):
-            payload.update(await attachments.add_voice_transcripts(messages))
-            fit_transcripts(payload, messages, settings.max_output_chars)
+        if isinstance(messages, list):
+            payload.update(await attachments.add_voice_transcripts(store, messages))
+            if not fit_transcripts(payload, messages, settings.max_output_chars):
+                payload["transcripts_note"] = (
+                    "Transcript text was left out to keep the result under WACLI_MCP_MAX_OUTPUT_CHARS. "
+                    "Read it from each message's `transcript_file`, or ask for fewer messages."
+                )
         return render(payload)
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
@@ -340,10 +351,18 @@ def build_server(
         ids = list(dict.fromkeys(message_id.strip() for message_id in message_ids))
         if not all(_MESSAGE_ID_RE.fullmatch(message_id) for message_id in ids):
             raise ToolError("message_ids must be message `id`s from list_messages or search_messages")
-        media = await attachments.collect(jid, ids, transcribe=transcribe, progress=ctx.report_progress)
+        try:
+            store = await library.resolve_store()
+        except MediaError as exc:
+            raise ToolError(str(exc)) from exc
+        media = await attachments.collect(store, jid, ids, transcribe=transcribe, progress=ctx.report_progress)
         payload: dict[str, Any] = {"notice": UNTRUSTED_NOTICE, "media_dir": str(library.root), "items": media.items}
         payload.update(media.notes)
-        fit_transcripts(payload, media.items, settings.max_output_chars)
+        if not fit_transcripts(payload, media.items, settings.max_output_chars):
+            raise ToolError(
+                f"The result is longer than WACLI_MCP_MAX_OUTPUT_CHARS ({settings.max_output_chars}) even without "
+                "transcript text. Ask for fewer message_ids, or raise the limit."
+            )
         return [TextContent(type="text", text=render(payload)), *media.images]
 
     if settings.read_only:

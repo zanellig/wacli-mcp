@@ -45,6 +45,8 @@ _MANIFEST = ".media.json"
 MAX_TRANSCRIPTION_JOBS = 8
 # Kept as a folder name as is: uppercase, so it can't collide with another id on a case-insensitive disk.
 _PLAIN_ENTRY = re.compile(r"^[A-Z0-9_-]{1,128}$")
+# Names Windows reserves for devices, with or without an extension.
+_WINDOWS_RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$", re.IGNORECASE)
 
 
 class MediaError(Exception):
@@ -98,15 +100,22 @@ def extension_for(mime_type: str, fallback_suffix: str) -> str:
 
 
 def _entry_name(value: str) -> str:
-    """A folder name for a chat JID or message id, unique for each exact value.
+    """A folder name for a chat JID or message id, unique for each exact value, even ignoring case.
 
-    WhatsApp message ids are usually uppercase hex and are used as is. Any other value gets a digest
-    of the original, so ids that differ only in replaced characters (`A.B`, `A_B`) or in case (`ab`,
-    `AB`, on Windows and macOS disks) never share a folder.
+    WhatsApp message ids are usually uppercase hex and are used as is. Any other value becomes
+    `~<value with unsafe characters replaced>-<digest of the original>`. Plain names never contain
+    `~`, so the two kinds can't meet, and the digest separates values that differ only in replaced
+    characters (`A.B`, `A_B`) or in case (`ab`, `AB`) on Windows and macOS disks.
     """
-    if _PLAIN_ENTRY.fullmatch(value):
+    if _PLAIN_ENTRY.fullmatch(value) and not _WINDOWS_RESERVED.fullmatch(value):
         return value
-    return f"{_SAFE_NAME.sub('_', value)}-{hashlib.sha256(value.encode()).hexdigest()[:10]}"
+    return f"~{_SAFE_NAME.sub('_', value)}-{hashlib.sha256(value.encode()).hexdigest()[:10]}"
+
+
+def _file_stem(message_id: str) -> str:
+    """The attachment's file name without extension: only letters, digits, `_` and `-`, never dot-named."""
+    stem = _SAFE_NAME.sub("_", message_id)
+    return f"_{stem}" if _WINDOWS_RESERVED.fullmatch(stem) else stem
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -156,6 +165,9 @@ class MediaLibrary:
 
     Layout: `<media dir>/store-<digest>/<chat>/<message id>/`. Each wacli store, which is one WhatsApp
     account, gets its own tree, so a path handed out for one account is never overwritten by another.
+    Callers resolve the store once per tool call with `resolve_store` and pass it to every method, and
+    every wacli command in that call runs with that `--store`, so a change of wacli's default account
+    can't mix two accounts in one tree.
     Each message folder holds the attachment, named `<message id><ext>`, and dot-named metadata: the
     `.media.json` manifest, which records the exact chat, message and store, and `.transcript-*.json`
     files. Attachment names never start with a dot, so the two never collide.
@@ -166,35 +178,34 @@ class MediaLibrary:
         self.wacli = wacli
         self.transcriber = transcriber
         self.root = (settings.media_dir or default_media_dir()).expanduser().resolve()
-        self._store_dir: str | None = None
         # Transcriptions in progress, by transcript path. A request for a file that is already being
         # transcribed, such as a retry after a client timeout, waits for the same job.
         self._jobs: dict[Path, _Job] = {}
 
-    async def _store_root(self) -> tuple[Path, str]:
-        """The tree for the store wacli actually uses, which `WACLI_STORE_DIR` or a default account can select."""
-        if self._store_dir is None:
-            try:
-                doctor = await self.wacli.run(["doctor"])
-            except WacliError as exc:
-                raise MediaError(f"could not ask wacli which store it uses: {exc}") from exc
-            store = doctor.get("store_dir") if isinstance(doctor, dict) else None
-            if not isinstance(store, str) or not store:
-                raise MediaError("wacli did not report its store folder")
-            self._store_dir = os.path.normcase(os.path.abspath(store))
-        digest = hashlib.sha256(self._store_dir.encode()).hexdigest()[:12]
-        return self.root / f"store-{digest}", self._store_dir
+    async def resolve_store(self) -> str:
+        """The store folder wacli uses right now, which `WACLI_STORE_DIR` or a default account can select."""
+        if self.settings.store and not self.settings.account:
+            return os.path.abspath(self.settings.store)
+        try:
+            doctor = await self.wacli.run(["doctor"])
+        except WacliError as exc:
+            raise MediaError(f"could not ask wacli which store it uses: {exc}") from exc
+        store = doctor.get("store_dir") if isinstance(doctor, dict) else None
+        if not isinstance(store, str) or not store:
+            raise MediaError("wacli did not report its store folder")
+        return os.path.abspath(store)
 
-    async def _folder(self, chat_jid: str, message_id: str) -> tuple[Path, dict[str, Any]]:
-        store_root, store_dir = await self._store_root()
+    def _folder(self, store: str, chat_jid: str, message_id: str) -> tuple[Path, dict[str, Any]]:
+        key = os.path.normcase(store)
+        store_root = (self.root / f"store-{hashlib.sha256(key.encode()).hexdigest()[:12]}").resolve()
         folder = (store_root / _entry_name(chat_jid) / _entry_name(message_id)).resolve()
-        if folder.parent.parent != store_root.resolve():
+        if folder.parent.parent != store_root:
             raise MediaError("invalid chat or message id")
-        return folder, {"chat_jid": chat_jid, "message_id": message_id, "store_dir": store_dir}
+        return folder, {"chat_jid": chat_jid, "message_id": message_id, "store_dir": key}
 
-    async def saved(self, chat_jid: str, message_id: str) -> MediaFile | None:
+    def saved(self, store: str, chat_jid: str, message_id: str) -> MediaFile | None:
         """The attachment downloaded earlier for exactly this message and wacli store, if any."""
-        folder, identity = await self._folder(chat_jid, message_id)
+        folder, identity = self._folder(store, chat_jid, message_id)
         manifest = _read_json(folder / _MANIFEST)
         if not manifest or manifest.get("identity") != identity:
             return None
@@ -215,12 +226,12 @@ class MediaLibrary:
             bytes=size,
         )
 
-    async def fetch(self, chat_jid: str, message_id: str) -> MediaFile:
+    async def fetch(self, store: str, chat_jid: str, message_id: str) -> MediaFile:
         """Download one message's attachment, or return the copy downloaded earlier."""
-        saved = await self.saved(chat_jid, message_id)
+        saved = self.saved(store, chat_jid, message_id)
         if saved:
             return saved
-        folder, identity = await self._folder(chat_jid, message_id)
+        folder, identity = self._folder(store, chat_jid, message_id)
         try:
             # Attachments are private: keep the folder readable by this user only, where the OS supports it.
             self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -232,7 +243,8 @@ class MediaLibrary:
         try:
             try:
                 data = await self.wacli.run(
-                    ["media", "download", "--chat", chat_jid, "--id", message_id, "--output", str(staging)]
+                    ["media", "download", "--chat", chat_jid, "--id", message_id, "--output", str(staging)],
+                    store=store,
                 )
             except WacliError as exc:
                 raise MediaError(_explain(str(exc))) from exc
@@ -243,8 +255,7 @@ class MediaLibrary:
                 raise MediaError("wacli saved the file somewhere other than the requested folder")
             mime_type = str(data.get("mime_type") or "")
             media_type = str(data.get("media_type") or "")
-            # Only letters, digits, `_` and `-`: never a dot-named metadata file.
-            target = folder / f"{_SAFE_NAME.sub('_', message_id)}{extension_for(mime_type, downloaded.suffix)}"
+            target = folder / f"{_file_stem(message_id)}{extension_for(mime_type, downloaded.suffix)}"
             os.replace(downloaded, target)
             _write_json(
                 folder / _MANIFEST,
@@ -283,12 +294,16 @@ class MediaLibrary:
                     f"{len(self._jobs)} transcriptions are already running. Ask for this one again once they finish."
                 )
             job = self._jobs[cache] = _Job()
-            threading.Thread(
-                target=self._run_job,
-                args=(cache, media, job, anyio.lowlevel.current_token()),
-                name="wacli-mcp-transcribe",
-                daemon=True,
-            ).start()
+            try:
+                threading.Thread(
+                    target=self._run_job,
+                    args=(cache, media, job, anyio.lowlevel.current_token()),
+                    name="wacli-mcp-transcribe",
+                    daemon=True,
+                ).start()
+            except RuntimeError as exc:
+                del self._jobs[cache]
+                raise MediaError(f"could not start transcribing: {exc}") from exc
         await job.done.wait()
         if job.result is None:
             raise MediaError(job.error or "transcription stopped without a result")
@@ -298,16 +313,17 @@ class MediaLibrary:
         try:
             # Another server process sharing the folder may have saved it meanwhile.
             job.result = _load_transcript(cache) or self.transcriber.transcribe(media.path)
-        # Decoder and model errors have many types; each becomes an error on its own item.
-        except Exception as exc:  # noqa: BLE001
-            job.error = f"could not transcribe this file: {exc}"
-        if job.result is not None:
             # If saving fails, the text is still returned, without a `transcript_file`.
             with contextlib.suppress(OSError):
                 _write_json(cache, asdict(job.result))
-        # The event loop is gone when the server is shutting down; nobody is waiting then.
-        with contextlib.suppress(RuntimeError):
-            anyio.from_thread.run_sync(self._finish, cache, job, token=token)
+        # Decoder and model errors have many types; each becomes an error on its own item.
+        except Exception as exc:  # noqa: BLE001
+            job.error = f"could not transcribe this file: {exc}"
+        finally:
+            # Always release the job, or every later request for this file would wait forever.
+            # The event loop is gone only when the server is shutting down; nobody is waiting then.
+            with contextlib.suppress(RuntimeError):
+                anyio.from_thread.run_sync(self._finish, cache, job, token=token)
 
     def _finish(self, cache: Path, job: _Job) -> None:
         self._jobs.pop(cache, None)

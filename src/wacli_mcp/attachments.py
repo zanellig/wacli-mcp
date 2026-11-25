@@ -24,6 +24,9 @@ _IMAGE_SIGNATURES = {"image/jpeg": b"\xff\xd8\xff", "image/png": b"\x89PNG\r\n\x
 # All inline photos in one result together may use this many times the per-photo limit.
 _INLINE_TOTAL_FACTOR = 4
 _TRUNCATED_MARK = " [...]"
+# What shortening adds besides the kept text: the mark and the `"transcript_truncated": true` line.
+# A transcript is shortened only when that saves characters, so the result grows with the cap.
+_TRUNCATION_OVERHEAD = len(_TRUNCATED_MARK) + 64
 
 Progress = Callable[[int, int, str], Awaitable[None]]
 
@@ -33,30 +36,34 @@ def to_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=1)
 
 
-def fit_transcripts(payload: dict[str, Any], entries: list[dict[str, Any]], limit: int) -> None:
+def fit_transcripts(payload: dict[str, Any], entries: list[dict[str, Any]], limit: int) -> bool:
     """Shorten the longest transcripts in `entries` until `to_json(payload)` fits in `limit` characters.
 
     Cutting the rendered JSON instead would break it and drop every later item. All transcripts are
-    capped at one length, the largest that fits, so short ones stay whole. Shortened entries get
-    `transcript_truncated`; their `transcript_file`, when present, has the full text.
+    capped at one length, the largest that fits, found by binary search over the whole serialized
+    payload. Short transcripts stay whole. Shortened entries get `transcript_truncated`, and their
+    `transcript_file`, when present, has the full text. If even empty transcripts don't fit, the text
+    is left out (`transcript_omitted`). Returns whether the payload fits now.
     """
     full = {id(entry): entry["transcript"] for entry in entries if isinstance(entry.get("transcript"), str)}
-    if not full or len(to_json(payload)) <= limit:
-        return
+    if len(to_json(payload)) <= limit:
+        return True
+    if not full:
+        return False
 
     def cap_at(length: int) -> None:
         for entry in entries:
             text = full.get(id(entry))
             if text is None:
                 continue
-            if len(text) > length:
+            if len(text) > length + _TRUNCATION_OVERHEAD:
                 entry["transcript"] = text[:length] + _TRUNCATED_MARK
                 entry["transcript_truncated"] = True
             else:
                 entry["transcript"] = text
                 entry.pop("transcript_truncated", None)
 
-    low, high, best = 0, max(len(text) for text in full.values()), 0
+    low, high, best = 0, max(len(text) for text in full.values()), None
     while low <= high:
         middle = (low + high) // 2
         cap_at(middle)
@@ -64,9 +71,15 @@ def fit_transcripts(payload: dict[str, Any], entries: list[dict[str, Any]], limi
             best, low = middle, middle + 1
         else:
             high = middle - 1
-    # If even empty transcripts don't fit, the rest of the result is too large on its own, and
-    # rendering cuts it as it would any other oversized result.
-    cap_at(best)
+    if best is not None:
+        cap_at(best)
+        return True
+    for entry in entries:
+        if id(entry) in full:
+            entry.pop("transcript", None)
+            entry.pop("transcript_truncated", None)
+            entry["transcript_omitted"] = True
+    return len(to_json(payload)) <= limit
 
 
 @dataclass
@@ -82,7 +95,7 @@ class Attachments:
         self.settings = settings
 
     async def collect(
-        self, chat_jid: str, message_ids: list[str], *, transcribe: bool, progress: Progress
+        self, store: str, chat_jid: str, message_ids: list[str], *, transcribe: bool, progress: Progress
     ) -> MediaResult:
         """Fetch each message's attachment. A failure is reported on its own item and doesn't stop the rest."""
         result = MediaResult()
@@ -92,7 +105,7 @@ class Attachments:
             item: dict[str, Any] = {"id": message_id}
             result.items.append(item)
             try:
-                media = await self.library.fetch(chat_jid, message_id)
+                media = await self.library.fetch(store, chat_jid, message_id)
             except MediaError as exc:
                 item["error"] = str(exc)
                 continue
@@ -111,7 +124,7 @@ class Attachments:
                 await self._add_transcript(item, media, result.notes)
         return result
 
-    async def add_voice_transcripts(self, messages: list[dict[str, Any]]) -> dict[str, str]:
+    async def add_voice_transcripts(self, store: str, messages: list[dict[str, Any]]) -> dict[str, str]:
         """Add a `transcript` to the newest voice notes in a page of messages. Returns notes for the result."""
         notes: dict[str, str] = {}
         audio = [m for m in messages if m.get("media_type") == "audio"]
@@ -121,13 +134,13 @@ class Attachments:
             if not isinstance(chat_jid, str) or not isinstance(message_id, str):
                 continue
             try:
-                media = await self.library.saved(chat_jid, message_id)
+                media = self.library.saved(store, chat_jid, message_id)
                 if media is None:
                     if unavailable:
                         # Nothing saved and no way to transcribe: don't download a file that can't be used.
                         notes["transcription_unavailable"] = unavailable
                         continue
-                    media = await self.library.fetch(chat_jid, message_id)
+                    media = await self.library.fetch(store, chat_jid, message_id)
             except MediaError as exc:
                 message["transcript_error"] = str(exc)
                 continue

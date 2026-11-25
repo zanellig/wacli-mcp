@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: Communications :: Chat",
 ]
 dependencies = [
-    "anyio>=4.5",
+    "anyio>=4.11",
     "mcp>=2.3,<3",
     "pydantic>=2.7",
     "pydantic-settings>=2.6",
