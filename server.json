@@ -17,6 +17,15 @@
       "transport": {
         "type": "stdio"
       }
+    },
+    {
+      "registryType": "npm",
+      "identifier": "wacli-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      }
     }
   ]
 }

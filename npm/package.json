@@ -1,0 +1,41 @@
+{
+  "name": "wacli-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that lets AI agents read your WhatsApp and send replies you confirm, through the wacli CLI.",
+  "mcpName": "io.github.zanellig/wacli-mcp",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "whatsapp",
+    "wacli",
+    "claude-code",
+    "codex"
+  ],
+  "homepage": "https://github.com/zanellig/wacli-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/zanellig/wacli-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zanellig/wacli-mcp.git",
+    "directory": "npm"
+  },
+  "license": "MIT",
+  "author": "zanellig",
+  "bin": {
+    "wacli-mcp": "bin/wacli-mcp.js"
+  },
+  "files": [
+    "bin",
+    "uv.json"
+  ],
+  "scripts": {
+    "prepack": "node -e \"for (const f of ['LICENSE', 'README.md']) require('node:fs').copyFileSync('../' + f, f)\"",
+    "pin-uv": "node scripts/pin-uv.mjs",
+    "test": "node test/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

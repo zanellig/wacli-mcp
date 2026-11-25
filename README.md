@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/zanellig/wacli-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zanellig/wacli-mcp/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/wacli-mcp)](https://pypi.org/project/wacli-mcp/)
+[![npm](https://img.shields.io/npm/v/wacli-mcp)](https://www.npmjs.com/package/wacli-mcp)
 [![Python versions](https://img.shields.io/pypi/pyversions/wacli-mcp)](https://pypi.org/project/wacli-mcp/)
 [![License: MIT](https://img.shields.io/github/license/zanellig/wacli-mcp)](https://github.com/zanellig/wacli-mcp/blob/main/LICENSE)
 
@@ -35,7 +36,7 @@ Claude Code / Codex  --stdio-->  wacli-mcp  --runs-->  wacli  --linked device-->
 ## Requirements
 
 - [wacli](https://github.com/openclaw/wacli) 0.26 or later, paired with your account.
-- [uv](https://docs.astral.sh/uv/) (it can install Python for you), or [pipx](https://pipx.pypa.io/) with Python 3.11 or later.
+- [uv](https://docs.astral.sh/uv/) (it can install Python for you), [pipx](https://pipx.pypa.io/) with Python 3.11 or later, or Node.js 18 or later to run it with `npx`.
 - Optional, for transcription: the `transcribe` extra, about 2 GB of disk for the model and libraries, and ideally an NVIDIA GPU. See [Transcription](#transcription).
 - Any MCP client. The optional server-side send confirmation needs a client that shows MCP elicitations, such as the Claude Code terminal app or the Codex CLI.
 
@@ -54,7 +55,7 @@ The phone-number option works when your phone can't scan the screen, for example
 
 ### 2. Install the plugin
 
-With wacli paired and `uvx` on your `PATH`, choose your client. The plugin registers the server and downloads wacli-mcp from PyPI on first use. Installing from GitHub requires access to this repository.
+With wacli paired and `uvx` on your `PATH`, choose your client. The plugin registers the server and downloads wacli-mcp from PyPI on first use.
 
 **Claude Code** (v2.1.292 or later)
 
@@ -81,6 +82,14 @@ uv tool install wacli-mcp
 With pipx, run `pipx install wacli-mcp`. If your shell can't find `wacli-mcp` after installation, run `uv tool update-shell` or `pipx ensurepath` for the installer you used, then restart your shell.
 
 To run on demand, use `uvx wacli-mcp` as your agent's stdio command. For the setup commands below, replace `-- wacli-mcp` with `-- uvx wacli-mcp`.
+
+With Node.js and no Python tools, use `npx -y wacli-mcp` as the command, for example `claude mcp add --scope user whatsapp -- npx -y wacli-mcp`. The npm package runs the PyPI release with the same version through uv. If uv is not on your `PATH`, it downloads a pinned uv release from GitHub on first start, checks its SHA-256, and keeps it in the `wacli-mcp/uv` folder of your user cache folder. uv then downloads Python and wacli-mcp, so the first start takes longer than later ones. The npm package reads these settings:
+
+| Variable | What it does |
+| --- | --- |
+| `WACLI_MCP_EXTRAS` | Extras to install, such as `transcribe` or `transcribe-cuda`. With a transcription extra, uses Python 3.13 unless `UV_PYTHON` is set. |
+| `WACLI_MCP_FROM` | What to run instead of the matching PyPI release: any uv requirement or path, such as a local checkout. |
+| `WACLI_MCP_CACHE_DIR` | Where to keep the downloaded uv. |
 
 Then register the executable with your client.
 
@@ -149,7 +158,7 @@ uv tool install --python 3.13 "wacli-mcp[transcribe]"        # CPU, or an NVIDIA
 uv tool install --python 3.13 "wacli-mcp[transcribe-cuda]"   # Windows with an NVIDIA GPU: installs the CUDA libraries too
 ```
 
-`--python 3.13` is there because onnxruntime, which faster-whisper needs, publishes wheels only up to Python 3.14. Without it, uv may pick a newer Python and fail to install. With `uvx`, use `uvx --python 3.13 --from "wacli-mcp[transcribe]" wacli-mcp` as the server command. Without the extra, `get_media` still returns the files, with a note on how to turn transcription on.
+`--python 3.13` is there because onnxruntime, which faster-whisper needs, publishes wheels only up to Python 3.14. Without it, uv may pick a newer Python and fail to install. With `uvx`, use `uvx --python 3.13 --from "wacli-mcp[transcribe]" wacli-mcp` as the server command. With `npx`, set `WACLI_MCP_EXTRAS=transcribe`. Without the extra, `get_media` still returns the files, with a note on how to turn transcription on.
 
 If `uv tool install` fails with "Access is denied" on Windows, a running agent session is still using wacli-mcp. Close those sessions and run it again.
 
@@ -273,8 +282,10 @@ uv run --no-sync pytest
 
 The tests run the server in-process against `tests/fake_wacli.py`, so they never touch a real WhatsApp account.
 
+The npm package in `npm/` starts the PyPI release with uv. `node npm/test/smoke.mjs` runs it against this checkout and checks that the server answers an MCP `initialize`; `--without-uv` hides uv from `PATH` to test the uv download. `node npm/scripts/pin-uv.mjs` pins the newest uv release in `npm/uv.json`.
+
 ## License
 
-[MIT](LICENSE). wacli-mcp is not affiliated with WhatsApp, Meta, or the wacli project.
+[MIT](https://github.com/zanellig/wacli-mcp/blob/main/LICENSE). wacli-mcp is not affiliated with WhatsApp, Meta, or the wacli project.
 
 <!-- mcp-name: io.github.zanellig/wacli-mcp -->

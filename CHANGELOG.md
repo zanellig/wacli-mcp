@@ -6,6 +6,11 @@ Every release has a page with these notes on the [releases page](https://github.
 
 ## [Unreleased]
 
+### Added
+
+- An npm package, so `npx -y wacli-mcp` runs the server. It starts the PyPI release with the same version through uv. If uv is not on `PATH`, it downloads a pinned uv release from GitHub, checks its SHA-256, and caches it. `WACLI_MCP_EXTRAS` picks extras such as `transcribe`.
+- The MCP Registry entry lists the npm package next to the PyPI one.
+
 ## [0.1.0] - 2026-11-25
 
 First release. It is alpha software: it works with real accounts, and its interface can still change before 1.0. It needs [wacli](https://github.com/openclaw/wacli) 0.26 or later and Python 3.11 or later.
