@@ -6,7 +6,15 @@ Every release has a page with these notes on the [releases page](https://github.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-25
+
+### Fixed
+
+- The release workflow publishes the npm package. For 0.1.1 it passed the package file to `npm publish` in a form npm reads as a GitHub repository, so only the PyPI package went out. 0.1.2 is the first version on npm and the first MCP Registry entry that lists it.
+
 ## [0.1.1] - 2026-11-25
+
+The npm package and the MCP Registry entry for this version were not published; see 0.1.2.
 
 ### Added
 
@@ -37,6 +45,7 @@ wacli is not an official WhatsApp client, and WhatsApp can block an account link
 - Installation from PyPI with `uv tool install wacli-mcp` or `uvx wacli-mcp`, an [MCP Registry](https://registry.modelcontextprotocol.io/) entry named `io.github.zanellig/wacli-mcp`, and plugins for Claude Code and Codex.
 - A [security policy](https://github.com/zanellig/wacli-mcp/security/policy) that lists what is in and out of scope for a report.
 
-[Unreleased]: https://github.com/zanellig/wacli-mcp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/zanellig/wacli-mcp/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/zanellig/wacli-mcp/releases/tag/v0.1.2
 [0.1.1]: https://github.com/zanellig/wacli-mcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/zanellig/wacli-mcp/releases/tag/v0.1.0
