@@ -322,12 +322,10 @@ class SharedTranscriber:
         fallback: Transcriber | None = None,
         start_timeout: float = 30.0,
     ) -> None:
-        from wacli_mcp.media import default_media_dir
-
         self._settings = settings
         self._local = WhisperTranscriber(settings)
         self._fallback = fallback or self._local
-        folder = (settings.media_dir or default_media_dir()).expanduser().resolve() / ".transcriber"
+        folder = settings.media_root / ".transcriber"
         self._where = ServiceAddress.for_folder(folder)
         self._command = list(service_command or [sys.executable, "-m", "wacli_mcp.transcription_service"])
         self._start_timeout = start_timeout

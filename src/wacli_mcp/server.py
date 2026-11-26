@@ -19,7 +19,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ImageContent, TextContent, ToolAnnotations
 from pydantic import BaseModel, Field, StrictBool
 
-from wacli_mcp import __version__
+from wacli_mcp._version import __version__
 from wacli_mcp.attachments import MAX_PER_CALL, Attachments, fit_transcripts, to_json
 from wacli_mcp.confirmation import ConfirmationLedger, confirmation_key, confirmation_message
 from wacli_mcp.media import MediaError, MediaLibrary
