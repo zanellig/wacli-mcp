@@ -9,7 +9,6 @@ import mimetypes
 import os
 import re
 import shutil
-import sys
 import tempfile
 import threading
 import uuid
@@ -78,17 +77,6 @@ class MediaFile:
     @property
     def is_audio_or_video(self) -> bool:
         return self.media_type in {"audio", "video"} or self.base_mime.startswith(("audio/", "video/"))
-
-
-def default_media_dir() -> Path:
-    """The per-user cache directory: `%LOCALAPPDATA%`, `~/Library/Caches`, or `$XDG_CACHE_HOME`."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Caches"
-    else:
-        base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    return base / "wacli-mcp" / "media"
 
 
 def extension_for(mime_type: str, fallback_suffix: str) -> str:
@@ -187,7 +175,7 @@ class MediaLibrary:
         self.settings = settings
         self.wacli = wacli
         self.transcriber = transcriber
-        self.root = (settings.media_dir or default_media_dir()).expanduser().resolve()
+        self.root = settings.media_root
         # Transcriptions in progress, by transcript path. A request for a file that is already being
         # transcribed, such as a retry after a client timeout, waits for the same job.
         self._jobs: dict[Path, _Job] = {}

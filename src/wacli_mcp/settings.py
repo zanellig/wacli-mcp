@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -115,3 +117,23 @@ class Settings(BaseSettings):
         default=None,
         description="Language code such as `es` or `en`. Unset: Whisper detects the language of each file.",
     )
+
+    @property
+    def media_root(self) -> Path:
+        """The media folder as an absolute path: `media_dir`, or the default in the user cache directory.
+
+        Both the attachment cache and the shared transcription service, which keeps its files in
+        `.transcriber` inside it, find their folder here.
+        """
+        return (self.media_dir or default_media_dir()).expanduser().resolve()
+
+
+def default_media_dir() -> Path:
+    """The per-user cache directory: `%LOCALAPPDATA%`, `~/Library/Caches`, or `$XDG_CACHE_HOME`."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Caches"
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return base / "wacli-mcp" / "media"

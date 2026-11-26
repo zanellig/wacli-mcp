@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from importlib.metadata import PackageNotFoundError, version
+from wacli_mcp._version import __version__
 
-try:
-    __version__ = version("wacli-mcp")
-except PackageNotFoundError:  # running from a source tree without installed metadata
-    __version__ = "0.0.0"
+__all__ = ["__version__", "main"]
 
 
 def main() -> None:
