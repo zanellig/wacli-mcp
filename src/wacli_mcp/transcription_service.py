@@ -47,7 +47,7 @@ _NOT_RUNNING = (FileNotFoundError, ConnectionError, EOFError)
 _HANDOVER_SECONDS = 2.0
 
 
-class ServiceUnavailable(Exception):
+class ServiceUnavailableError(Exception):
     """The shared service could not be reached or started."""
 
 
@@ -104,7 +104,7 @@ class ServiceAddress:
                 continue
             with os.fdopen(handle, "w", encoding="ascii") as file:
                 file.write(secrets.token_hex(32))
-        raise ServiceUnavailable(f"could not read {self.key_file}")
+        raise ServiceUnavailableError(f"could not read {self.key_file}")
 
     def connect(self) -> Channel:
         return Client(self.address, family=self.family, authkey=self.key())
@@ -347,7 +347,7 @@ class SharedTranscriber:
         info["mode"] = "shared service"
         try:
             response = self._request({"op": "status"}, start=False)
-        except ServiceUnavailable:
+        except ServiceUnavailableError:
             response = None
         if response and response.get("ok"):
             info["service"] = response["status"]
@@ -368,7 +368,7 @@ class SharedTranscriber:
         }
         try:
             response = self._request(request, start=True)
-        except ServiceUnavailable as exc:
+        except ServiceUnavailableError as exc:
             self._service_error = str(exc)
             return self._fallback.transcribe(path)
         self._service_error = None
@@ -378,7 +378,7 @@ class SharedTranscriber:
 
     def stop_service(self) -> None:
         """Ask a running service to exit now. Does nothing when none is running."""
-        with contextlib.suppress(ServiceUnavailable):
+        with contextlib.suppress(ServiceUnavailableError):
             self._request({"op": "stop"}, start=False)
 
     def _request(self, message: dict[str, Any], *, start: bool) -> dict[str, Any] | None:
@@ -402,15 +402,15 @@ class SharedTranscriber:
                 return None
             if response.get("protocol", PROTOCOL) != PROTOCOL:
                 # A service started by another wacli-mcp version; it exits once idle.
-                raise ServiceUnavailable(str(response.get("error")))
+                raise ServiceUnavailableError(str(response.get("error")))
             return response
-        raise ServiceUnavailable(f"the transcription service stopped answering: {failure}")
+        raise ServiceUnavailableError(f"the transcription service stopped answering: {failure}")
 
     def _open(self) -> Channel:
         try:
             return self._where.connect()
         except AuthenticationError as exc:
-            raise ServiceUnavailable(f"something else is listening at {self._where.address}") from exc
+            raise ServiceUnavailableError(f"something else is listening at {self._where.address}") from exc
 
     def _connect(self, *, start: bool) -> Channel:
         if not start and not self._where.key_file.exists():
@@ -430,7 +430,7 @@ class SharedTranscriber:
                 time.sleep(0.1)
                 with contextlib.suppress(*_NOT_RUNNING):
                     return self._open()
-        raise ServiceUnavailable(
+        raise ServiceUnavailableError(
             f"the transcription service did not start within {self._start_timeout:g} s; see {self._where.log_file}"
         )
 
