@@ -68,7 +68,11 @@ dev = [
 line-length = 120
 
 [tool.ruff.lint]
-extend-select = ["I", "B", "UP", "SIM", "RUF", "BLE"]
+extend-select = ["I", "B", "UP", "SIM", "RUF", "BLE", "C901", "ERA001", "PGH003"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test doubles dispatch subcommands in one long branch chain.
+"tests/**" = ["C901"]
 
 [tool.ruff.lint.isort]
 # Test helpers in tests/support.py.
