@@ -52,7 +52,8 @@ class MediaError(Exception):
     """An attachment could not be downloaded or transcribed. The message is meant for the agent."""
 
 
-class TranscriptionUnavailable(MediaError):
+# Not a failure: the transcription extra is optional, and callers report this as a note.
+class TranscriptionUnavailable(Exception):  # noqa: N818
     """No transcript is saved for this file, and this server cannot make one."""
 
 
